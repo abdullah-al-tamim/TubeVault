@@ -1,0 +1,13 @@
+# Security model
+
+- Bind localhost by default. Every API session requires a 16+ character configured password, including localhost clients. The password stays in ignored `.env`; protect this file with current-user NTFS permissions. Tokens and resumable session URLs use Windows Credential Manager. A plaintext keyring fallback is refused.
+- HttpOnly, SameSite=Strict cookies expire after 12 hours and are invalidated on server restart/logout. Mutation requests require an allowlisted Origin and session CSRF token. No permissive CORS middleware is installed. Explicit Host validation limits DNS rebinding. Login permits at most ten failed attempts per client IP in five minutes.
+- Set secure cookies and configure trusted HTTPS for LAN use. Local HTTP is not confidential on a LAN. No public internet exposure, port forwarding, telemetry, analytics or remote database is configured.
+- A signed-in user is the trusted vault administrator. Watch roots can read any directory that the Windows user can read. Phone users share the same administrator role; per-device/restricted importer roles are not yet implemented.
+- Import names reject traversal, drive syntax, NTFS streams, reserved Windows device names and separators. Generated transfer IDs choose storage paths; client filenames cannot choose arbitrary destinations. Chunk size is bounded to 8 MiB and total declared transfer size to 256 GB. Import storage must stay on local NTFS and be writable only by trusted users; local administrators can bypass application protections.
+- Secret response bodies, token URLs and request bodies are not logged. Diagnostics use constrained Google reason codes and exception class names. OAuth callback logging is suppressed. Uvicorn access logs are disabled. Data paths and filenames in history are personal information; protect backups.
+- Remote upload outcomes are not exactly-once transactions. The safety policy favors blocked uncertain jobs over silent duplicate uploads. Playlist insertion checks membership before retrying. Remote operations are never automatically deleted to compensate for failures.
+- Source bytes are read only. Repeated size/mtime checks plus SHA-256 detect normal changes. A concurrently writing process can still race a read; archive completed, stable files, and use a long stability interval for SMB/network copying. Container sniffing is a preliminary check, not a full codec validator.
+- No automatic retention deletion, remote visibility changes, remote deletion or destructive migration downgrade is implemented.
+
+Review dependencies regularly. Use the checked-in frontend lockfile and `requirements.lock` for repeatable Python environments. Do not expose Vite's development server to the LAN; serve the production build through FastAPI.
