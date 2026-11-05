@@ -50,6 +50,7 @@ type Job = {
   made_for_kids: boolean;
 };
 type Snapshot = {
+  preview?: boolean;
   stats?: { discovered: number; archived: number; queued: number; failed: number; bytes: number };
   jobs: Job[];
   watches: any[];
@@ -383,7 +384,8 @@ function App() {
             <i /> Running locally <span>·</span> Windows PC
           </div>
         </header>
-        <div className="content">
+          <div className="content">
+            {data?.preview && <div className="alert" role="status">UI preview · Sample data only · No real files or YouTube uploads</div>}
           <div className="page-heading">
             <div>
               <div className="eyebrow">YOUR PERSONAL VIDEO ARCHIVE</div>

@@ -4,6 +4,8 @@ A local Windows video archive with a React dashboard, durable SQLite upload queu
 
 ## Run on Windows
 
+**Just want to see the UI?** Double-click `Start-Preview.cmd` for an isolated sample-data preview. See [PREVIEW.md](PREVIEW.md). A source checkout needs `npm ci` and `npm run build` in `frontend` first; the preview ZIP already includes that build.
+
 Requirements: Python 3.12+, Node.js 22.12+ recommended, Windows Credential Manager, a Google Cloud Desktop OAuth client, and a YouTube channel. No cloud database or hosting subscription.
 
 ```powershell

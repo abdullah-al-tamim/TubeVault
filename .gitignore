@@ -16,3 +16,4 @@ client_secret*.json
 coverage*
 test-results/
 playwright-report/
+artifacts/

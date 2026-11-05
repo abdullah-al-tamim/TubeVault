@@ -33,11 +33,11 @@ Before updates: pause queue, stop app, back up database, update code, reinstall 
 
 ## GitHub
 
-The available GitHub connector does not expose repository creation, and GitHub CLI was not installed during development. Local commits are provided. To publish privately after installing/authenticating `gh`:
+The project repository is https://github.com/abdullah-al-tamim/TubeVault. To get the source on another PC:
 
 ```powershell
-gh auth login
-gh repo create tubevault --private --source . --remote origin --push
+git clone https://github.com/abdullah-al-tamim/TubeVault.git
+cd TubeVault
 ```
 
-Review `git status` first; ignored `data/`, `.env`, tokens and footage must remain untracked.
+For UI-only exploration use the preview ZIP and `Start-Preview.cmd`; see PREVIEW.md. Before pushing changes, review `git status`; ignored `data/`, `.env`, tokens and footage must remain untracked.
