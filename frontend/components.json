@@ -1,1 +1,12 @@
-{"style":"default","rsc":false,"tsx":true,"tailwind":{"config":"tailwind.config.js","css":"src/styles.css","baseColor":"slate","cssVariables":false},"aliases":{"components":"./src/components","utils":"./src/lib/utils"}}
+{
+  "style": "default",
+  "rsc": false,
+  "tsx": true,
+  "tailwind": {
+    "config": "tailwind.config.js",
+    "css": "src/styles.css",
+    "baseColor": "slate",
+    "cssVariables": false
+  },
+  "aliases": { "components": "./src/components", "utils": "./src/lib/utils" }
+}

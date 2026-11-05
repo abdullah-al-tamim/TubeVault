@@ -48,7 +48,7 @@ class YouTube:
     def playlists(self):
         return self.list_all("playlists", {"part": "snippet,status", "mine": "true", "maxResults": 50})
 
-    def ensure_playlist(self, mapping):
+    def ensure_playlist(self, mapping, before_create=None):
         if mapping.playlist_id:
             return mapping.playlist_id
         marker = "TubeVault collection " + mapping.id
@@ -61,6 +61,8 @@ class YouTube:
             return matching[0]["id"]
         if len(matching) > 1:
             raise APIError("Ambiguous_playlist_select_existing_ID")
+        if before_create:
+            before_create()
         return self.request("POST", "playlists", params={"part": "snippet,status"}, json={
             "snippet": {"title": mapping.title[:150], "description": marker},
             "status": {"privacyStatus": mapping.privacy}}).json()["id"]

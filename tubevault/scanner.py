@@ -82,8 +82,11 @@ class Scanner:
         with self.db.session() as s:
             mapping = s.scalar(select(Mapping).where(Mapping.watch_id == w.id, Mapping.folder_key == folder_key))
             if not mapping:
+                title = folder.name if folder != root else root.name + " — Unsorted"
+                if s.scalar(select(Mapping).where(Mapping.title == title, Mapping.watch_id != w.id)):
+                    title = root.name + " — " + title
                 mapping = Mapping(watch_id=w.id, folder_key=folder_key, path=str(folder),
-                                  title=folder.name if folder != root else root.name + " — Unsorted", privacy=w.privacy)
+                                  title=title, privacy=w.privacy)
                 s.add(mapping)
                 s.flush()
             mapping.path = str(folder)
@@ -129,6 +132,9 @@ class Scanner:
             instance.identity_id = identity.id
             duplicate = s.scalar(select(Job).where(Job.identity_id == identity.id))
             if duplicate:
+                old_instance = s.get(Instance, duplicate.instance_id)
+                if not Path(old_instance.path).exists() and not duplicate.claimed:
+                    duplicate.instance_id = instance.id
                 instance.reason = "Duplicate content: " + duplicate.id
                 return
             instance.reason = "QUEUED"

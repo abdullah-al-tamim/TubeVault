@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from sqlalchemy import select, update
-from .db import Job, Instance, Identity, Mapping, UploadSession, Video, Account, Attempt, Notification, transition
+from .db import Job, Instance, Identity, Mapping, UploadSession, Video, Account, Attempt, Notification, Setting, transition
 from .scanner import digest
 from .youtube import APIError
 
@@ -38,6 +38,7 @@ class Worker:
     def __init__(self, db, youtube, secrets):
         self.db, self.youtube, self.secrets = db, youtube, secrets
         self.stop = threading.Event()
+        self.network_blocked = threading.Event()
         self.playlist_lock = threading.Lock()
 
     def recover(self):
@@ -118,20 +119,27 @@ class Worker:
                     with self.db.session() as s:
                         s.add(UploadSession(job_id=job_id, secret_key=secret_key))
                     session = UploadSession(job_id=job_id, secret_key=secret_key, offset=0)
-                except Exception:
+                except Exception as e:
                     with self.db.session() as s:
-                        transition(s, s.get(Job, job_id), "UPLOAD_UNCERTAIN", "Session creation could not be confirmed")
+                        if isinstance(e, APIError) and (e.quota or not e.retryable):
+                            transition(s, s.get(Job, job_id), "FAILED_RETRYABLE" if e.quota else "FAILED_PERMANENT", e.reason)
+                        else:
+                            transition(s, s.get(Job, job_id), "UPLOAD_UNCERTAIN", "Session creation could not be confirmed")
+                    if isinstance(e, APIError) and e.quota:
+                        self.db.configure({"cooldown": time.time() + 86400})
                     return
             uri = self.secrets.get(session.secret_key)
             if not uri:
                 with self.db.session() as s:
                     transition(s, s.get(Job, job_id), "UPLOAD_UNCERTAIN", "Session credential missing")
                 return
+            with self.db.session() as s:
+                transition(s, s.get(Job, job_id), "UPLOADING", "Probing saved session")
             response = self.youtube.probe(uri, identity.size)
             offset, video_id = self.ack(response, identity.size)
             with path.open("rb") as source:
                 while not video_id and offset < identity.size:
-                    if self.stop.is_set() or not allowed(self.db.settings()):
+                    if self.stop.is_set() or self.network_blocked.is_set() or not allowed(self.db.settings()):
                         return
                     with self.db.session() as s:
                         if s.get(Job, job_id).state in {"PAUSED", "SKIPPED"}:
@@ -181,10 +189,19 @@ class Worker:
         with self.playlist_lock:
             with self.db.session() as s:
                 mapping = s.get(Mapping, job.mapping_id)
-            playlist_id = self.youtube.ensure_playlist(mapping)
+            intent_key = "playlist-intent-" + mapping.id
+            def before_create():
+                with self.db.session() as s:
+                    if s.get(Setting, intent_key):
+                        raise APIError("Playlist_creation_uncertain_select_existing_ID")
+                    s.add(Setting(key=intent_key, value={"attempted": time.time()}))
+            playlist_id = self.youtube.ensure_playlist(mapping, before_create=before_create)
             with self.db.session() as s:
                 current_mapping = s.get(Mapping, job.mapping_id)
                 current_mapping.playlist_id, current_mapping.account_id = playlist_id, account.id
+                intent = s.get(Setting, intent_key)
+                if intent:
+                    s.delete(intent)
             self.youtube.insert(playlist_id, job.video_id)
         with self.db.session() as s:
             transition(s, s.get(Job, job_id), "COMPLETED")

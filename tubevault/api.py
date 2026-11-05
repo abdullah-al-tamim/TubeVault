@@ -9,8 +9,8 @@ from fastapi import FastAPI, APIRouter, Depends, HTTPException, Request, Respons
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
-from sqlalchemy import select
-from .db import Database, Watch, Mapping, Job, Instance, Identity, Account, Event, Transfer, Video, transition
+from sqlalchemy import select, func
+from .db import Database, Watch, Mapping, Job, Instance, Identity, Account, Event, Transfer, Video, UploadSession, transition
 from .config import config as default_config
 from .security import Security
 from .scanner import Scanner
@@ -92,7 +92,7 @@ def create_app(config=default_config, db=None, services=None, background=True):
         from .youtube import YouTube
         from .worker import Worker
         from .scheduler import Scheduler
-        secrets = Secrets()
+        secrets = Secrets(config.data_dir)
         auth = Auth(db, secrets, config)
         youtube = YouTube(auth)
         worker = Worker(db, youtube, secrets)
@@ -152,12 +152,18 @@ def create_app(config=default_config, db=None, services=None, background=True):
                             path=s.get(Instance, job.instance_id).path, playlist=s.get(Mapping, job.mapping_id).title)
                 jobs.append(item)
             account = s.scalar(select(Account))
-            return {"jobs": jobs, "watches": [rowdict(w) for w in s.scalars(select(Watch))],
+            counts = dict(s.execute(select(Job.state, func.count()).group_by(Job.state)).all())
+            stats = {"discovered": s.scalar(select(func.count()).select_from(Instance)),
+                     "archived": counts.get("COMPLETED", 0),
+                     "queued": sum(counts.get(k, 0) for k in ("QUEUED", "PAUSED", "UPLOADING", "PROCESSING", "PLAYLIST_PENDING")),
+                     "failed": sum(counts.get(k, 0) for k in ("FAILED_RETRYABLE", "FAILED_PERMANENT", "UPLOAD_UNCERTAIN")),
+                     "bytes": s.scalar(select(func.coalesce(func.sum(Identity.size), 0)).join(Job, Job.identity_id == Identity.id).where(Job.state == "COMPLETED"))}
+            return {"stats": stats, "jobs": jobs, "watches": [rowdict(w) for w in s.scalars(select(Watch))],
                     "mappings": [rowdict(m) for m in s.scalars(select(Mapping))],
                     "instances": [rowdict(i) for i in s.scalars(select(Instance).limit(2000))],
                     "events": [rowdict(e) for e in s.scalars(select(Event).order_by(Event.at.desc()).limit(100))],
                     "imports": [rowdict(t) for t in s.scalars(select(Transfer))],
-                    "account": rowdict(account) if account else None, "settings": db.settings()}
+                    "account": rowdict(account) | {"connected": auth.connected()} if account else None, "settings": db.settings()}
 
     @api.get("/snapshot")
     def get_snapshot():
@@ -177,7 +183,10 @@ def create_app(config=default_config, db=None, services=None, background=True):
 
     @api.post("/watches")
     def add_watch(body: WatchInput):
-        path = Path(body.path).resolve(strict=True)
+        try:
+            path = Path(body.path).resolve(strict=True)
+        except OSError:
+            raise HTTPException(400, "Directory is unavailable; check its path and drive connection") from None
         if not path.is_dir():
             raise HTTPException(400, "Choose an existing directory")
         with db.session() as s:
@@ -241,7 +250,7 @@ def create_app(config=default_config, db=None, services=None, background=True):
                 raise HTTPException(409, "Already completed")
             target = {"pause": "PAUSED", "exclude": "SKIPPED"}.get(action)
             if not target:
-                target = "PROCESSING" if job.video_id else "UPLOADING" if s.get(__import__('tubevault.db', fromlist=['UploadSession']).UploadSession, job.id) else "QUEUED"
+                target = "PROCESSING" if job.video_id else "UPLOADING" if s.get(UploadSession, job.id) else "QUEUED"
             transition(s, job, target, "User action")
             job.next_attempt = 0
             return {"ok": True}

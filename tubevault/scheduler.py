@@ -45,6 +45,10 @@ class Scheduler:
                     settings = self.db.settings()
                     if settings["pause_metered"] and now - last_cost > 60:
                         blocked, last_cost = metered(), now
+                    if settings["pause_metered"] and blocked:
+                        self.worker.network_blocked.set()
+                    else:
+                        self.worker.network_blocked.clear()
                     tasks = [f for f in tasks if not f.done()]
                     if not settings["pause_metered"] or not blocked:
                         for _ in range(max(0, settings["concurrency"] - len(tasks))):

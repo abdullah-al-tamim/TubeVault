@@ -1,4 +1,6 @@
 import json
+import logging
+import hashlib
 import threading
 import keyring
 from google.oauth2.credentials import Credentials
@@ -10,20 +12,22 @@ SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl"
 
 
 class Secrets:
-    def __init__(self):
+    def __init__(self, data_dir=None):
         # Fail closed: do not silently use a plaintext third-party keyring backend.
         if "Windows" not in type(keyring.get_keyring()).__module__:
             raise RuntimeError("TubeVault requires Windows Credential Manager")
+        from .config import config
+        self.service = "TubeVault-" + hashlib.sha256(str((data_dir or config.data_dir).resolve()).encode()).hexdigest()[:16]
 
     def get(self, key):
-        return keyring.get_password("TubeVault", key)
+        return keyring.get_password(self.service, key)
 
     def set(self, key, value):
-        keyring.set_password("TubeVault", key, value)
+        keyring.set_password(self.service, key, value)
 
     def delete(self, key):
         if self.get(key):
-            keyring.delete_password("TubeVault", key)
+            keyring.delete_password(self.service, key)
 
 
 class Auth:
@@ -31,6 +35,9 @@ class Auth:
         self.db, self.secrets, self.config = db, secrets, config
         self.lock = threading.Lock()
         self.connect_lock = threading.Lock()
+
+    def connected(self):
+        return bool(self.secrets.get("google"))
 
     def token(self):
         with self.lock:
@@ -47,6 +54,7 @@ class Auth:
         if not self.connect_lock.acquire(blocking=False):
             raise RuntimeError("Connection already in progress")
         try:
+            logging.getLogger("google_auth_oauthlib.flow").disabled = True
             flow = InstalledAppFlow.from_client_secrets_file(str(self.config.client_secret), [SCOPE], autogenerate_code_verifier=True)
             credentials = flow.run_local_server(host="127.0.0.1", port=0, timeout_seconds=180,
                                               authorization_prompt_message="Complete authorization in your browser.",

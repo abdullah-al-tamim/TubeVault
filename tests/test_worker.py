@@ -96,6 +96,23 @@ def test_claim_exclusion(db, rig):
     assert worker.claim() is None
 
 
+def test_concurrent_claim_has_single_owner(db, rig):
+    from concurrent.futures import ThreadPoolExecutor
+    worker, _, job_id = rig
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        claims = list(pool.map(lambda _: worker.claim(), range(4)))
+    assert claims.count(job_id) == 1
+
+
+def test_quota_at_session_creation_can_retry_without_uncertainty(db, rig):
+    worker, yt, job_id = rig
+    yt.start.side_effect = APIError("quotaExceeded", quota=True)
+    worker.step()
+    with db.session() as s:
+        assert s.get(Job, job_id).state == "FAILED_RETRYABLE"
+    assert db.settings()["cooldown"] > 0
+
+
 def test_quota_cooldown(db, rig):
     worker, yt, _ = rig
     yt.video.side_effect = APIError("quotaExceeded", quota=True)
@@ -156,3 +173,23 @@ def test_playlist_marker_reuse_and_membership():
     yt.request = Mock()
     yt.insert("existing", "video")
     yt.request.assert_not_called()
+
+
+def test_ambiguous_playlist_creation_requires_reconciliation(db, rig):
+    worker, yt, job_id = rig
+    attempts = []
+    def ambiguous(mapping, before_create):
+        before_create()
+        attempts.append(mapping.id)
+        raise APIError("Network interruption", retryable=True)
+    yt.ensure_playlist.side_effect = ambiguous
+    worker.step()
+    with db.session() as s:
+        s.get(Job, job_id).next_attempt = 0
+    worker.step()
+    assert len(attempts) == 1
+    with db.session() as s:
+        job = s.get(Job, job_id)
+        assert job.video_id == 'abcdefghijk'
+        assert job.error == 'Playlist_creation_uncertain_select_existing_ID'
+    assert yt.start.call_count == 1
