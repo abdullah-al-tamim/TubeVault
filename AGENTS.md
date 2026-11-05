@@ -1,0 +1,3 @@
+# TubeVault engineering rules
+
+Never modify/delete source footage or automatically delete remote resources. Never log tokens, OAuth responses, session URLs, passwords, or request bodies. All remote changes need explicit privacy. Upload and playlist insertion are separate durable operations. An ambiguous upload must never automatically create a new session. Do not run live uploads unless explicitly authorized. Default localhost, authenticated access, manual queue, private visibility. Keep API, service, database and Google transport separate. Persist transitions and recovery evidence. Run pytest, frontend typecheck/build, Vitest and Playwright when changing their relevant flows. No credentials or footage in Git. Document untested hardware/network behavior honestly.
