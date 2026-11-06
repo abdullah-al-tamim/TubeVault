@@ -4,7 +4,7 @@ A local Windows video archive with a React dashboard, durable SQLite upload queu
 
 ## Run on Windows
 
-**Desktop app:** install `artifacts/TubeVault-Setup-0.2.0.exe`, then open TubeVault from the desktop or Start menu. The first-run guide walks through Google credentials, channel connection, folders and background startup. See [DESKTOP.md](DESKTOP.md) for installation and build instructions.
+**Desktop app:** install `artifacts/TubeVault-Setup-0.2.2.exe`, then open TubeVault from the desktop or Start menu. The first-run guide walks through Google credentials, channel connection, folders and background startup. See [DESKTOP.md](DESKTOP.md) for installation and build instructions.
 
 **Just want to see the UI?** Double-click `Start-Preview.cmd` for an isolated sample-data preview. See [PREVIEW.md](PREVIEW.md). A source checkout needs `npm ci` and `npm run build` in `frontend` first; the preview ZIP already includes that build.
 

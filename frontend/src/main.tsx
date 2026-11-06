@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { Button } from "./components/ui/button";
 import { api, setCsrf, transfer, restoreSession } from "./api";
+import { QueuePanel } from "./components/QueuePanel";
 import { SetupGuide, type SetupStatus } from './components/SetupGuide';
 import { bytes, percent } from "./lib/utils";
 import "./styles.css";
@@ -153,7 +154,7 @@ function App() {
           <ArrowUpRight size={17} />
         </a>
       )}
-      {["QUEUED", "PAUSED"].includes(j.state) && (
+      {["QUEUED", "PAUSED", "DUPLICATE_TITLE"].includes(j.state) && (
         <Button variant="ghost" onClick={() => setEdit({ ...j })}>
           Edit
         </Button>
@@ -181,19 +182,19 @@ function App() {
               onClick={() =>
                 run(() =>
                   api(
-                    `/jobs/${j.id}/${j.state === "QUEUED" ? "pause" : "retry"}`,
+                    `/jobs/${j.id}/${["QUEUED", "UPLOADING", "PROCESSING", "PLAYLIST_PENDING"].includes(j.state) ? "pause" : "retry"}`,
                     "POST",
                   ),
                 )
               }
             >
-              {j.state === "QUEUED" ? "Pause" : "Retry"}
+              {["QUEUED", "UPLOADING", "PROCESSING", "PLAYLIST_PENDING"].includes(j.state) ? "Pause" : "Resume"}
             </Button>
             <Button
               variant="ghost"
               onClick={() => run(() => api(`/jobs/${j.id}/exclude`, "POST"))}
             >
-              Exclude
+              Skip
             </Button>
           </>
         )
@@ -588,6 +589,7 @@ function App() {
                     View queue <ArrowUpRight size={15} />
                   </button>
                 </div>
+                {active && <div className="queue-tools"><strong>Current upload: {active.title}</strong><Button onClick={()=>run(()=>api(`/jobs/${active.id}/pause`,"POST"))}>Pause this video</Button><Button onClick={()=>run(()=>api(`/jobs/${active.id}/cancel`,"POST"))}>Cancel this video</Button><small>The next eligible video continues while this one is held.</small></div>}
                 {table(jobs.slice(0, 5))}
               </section>
               <div className="overview-grid lower">
@@ -627,7 +629,8 @@ function App() {
               </div>
             </>
           )}
-          {(page === "Upload Queue" || page === "Archive History") && (
+          {page === "Upload Queue" && <QueuePanel jobs={jobs} settings={settings} desktop={!!setupStatus?.desktop} refresh={load} details={id=>actions(jobs.find(j=>j.id===id)!)}/>}
+          {page === "Archive History" && (
             <section className="panel">
               <div className="panel-heading">
                 <label className="search">
@@ -638,26 +641,6 @@ function App() {
                     onChange={(e) => setSearch(e.target.value)}
                   />
                 </label>
-                {page === "Upload Queue" && (
-                  <Button
-                    variant="outline"
-                    onClick={() =>
-                      run(() =>
-                        api(
-                          `/queue/${settings?.paused ? "resume" : "pause"}`,
-                          "POST",
-                        ),
-                      )
-                    }
-                  >
-                    {settings?.paused ? (
-                      <Play size={15} />
-                    ) : (
-                      <Pause size={15} />
-                    )}{" "}
-                    {settings?.paused ? "Start queue" : "Pause queue"}
-                  </Button>
-                )}
               </div>
               {table(
                 (page === "Archive History"

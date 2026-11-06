@@ -51,6 +51,10 @@ class DesktopHost:
         selected = self.window.create_file_dialog(webview.FileDialog.FOLDER)
         return selected[0] if selected else None
 
+    def choose_files(self):
+        import webview
+        return list(self.window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=True, file_types=("Videos (*.mp4;*.mov;*.mkv;*.avi;*.m4v;*.webm;*.mts;*.m2ts)", "All files (*.*)")) or [])
+
     def open_google(self):
         import webbrowser
         webbrowser.open('https://console.cloud.google.com/apis/credentials')
@@ -114,7 +118,8 @@ def main():
     parser.add_argument('--background', action='store_true')
     parser.add_argument('--data-dir', type=Path)
     args = parser.parse_args()
-    data_dir = (args.data_dir or Path(os.environ['LOCALAPPDATA']) / 'TubeVault' / 'data').resolve()
+    from .desktop_data import desktop_data_dir
+    data_dir = (args.data_dir or desktop_data_dir()).resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
     from .auth import Secrets
     store = Secrets(data_dir)

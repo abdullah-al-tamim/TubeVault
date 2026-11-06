@@ -66,3 +66,26 @@ def test_protected_desktop_setup_and_client_import(db, tmp_path):
         host.set_startup.assert_called_once_with(True)
         assert db.settings()['onboarding_completed'] is True
         assert db.settings()['paused'] is True
+        assert client.post('/api/queue/bulk',json={'ids':['missing'],'action':'pause'},headers=headers).json()['results'][0]['ok'] is False
+        assert client.post('/api/queue/add-files',json={'paths':['missing.mp4']},headers=headers).status_code == 200
+        assert client.put('/api/queue/concurrency',json={'concurrency':4},headers=headers).status_code == 200
+        assert db.settings()['concurrency'] == 4
+        assert client.put('/api/queue/concurrency',json={'concurrency':359},headers=headers).status_code == 422
+
+
+def test_legacy_vault_migration_preserves_db_and_protected_credentials(db,tmp_path):
+    from tubevault.desktop_data import migrate_legacy
+    from tubevault.db import Database
+    source=tmp_path/'legacy';source.mkdir()
+    import sqlite3
+    with sqlite3.connect(tmp_path/'test.db') as old,sqlite3.connect(source/'tubevault.db') as new:old.backup(new)
+    (source/'inbox').mkdir();(source/'inbox'/'part.bin').write_bytes(b'preserved')
+    target=tmp_path/'stable'/'data'
+    stores={source:MemorySecrets(),target:MemorySecrets()}
+    stores[source].set('google','test-only-protected-token')
+    migrate_legacy(source,target,lambda p:stores[p])
+    assert stores[target].get('google')=='test-only-protected-token'
+    assert (target/'inbox'/'part.bin').read_bytes()==b'preserved'
+    assert (source/'tubevault.db').exists()
+    assert (target/'tubevault.db').exists()
+    migrate_legacy(source,target,lambda p:stores[p])

@@ -36,6 +36,45 @@ class Scanner:
     def __init__(self, db):
         self.db, self.lock = db, threading.Lock()
 
+    def add_files(self, paths):
+        from .queue_controls import control_jobs
+        results = []
+        with self.lock:
+            for raw in dict.fromkeys(paths):
+                try:
+                    path = Path(raw).resolve(strict=True)
+                    if not path.is_file() or path.suffix.lower() not in EXTENSIONS:
+                        raise ValueError("Choose a supported video file")
+                    if time.time() - path.stat().st_mtime < 60:
+                        raise ValueError("File is recent; wait 60 seconds after copying finishes")
+                    with self.db.session() as s:
+                        watches = list(s.scalars(select(Watch)))
+                        matches = [w for w in watches if path.is_relative_to(Path(w.path))]
+                        watch = max(matches, key=lambda w: len(w.path)) if matches else None
+                        if watch is None:
+                            watch = Watch(path=str(path.parent), enabled=False, automatic=False, stability=60)
+                            s.add(watch)
+                            s.flush()
+                    # Explicit selection does not enable a parent-folder scan.
+                    watch.stability = 0
+                    watch.unsorted = True
+                    watch.excludes = []
+                    self._file(watch, Path(watch.path), path, self.db.settings())
+                    with self.db.session() as s:
+                        instance = s.scalar(select(Instance).where(Instance.path == str(path)))
+                        job = s.scalar(select(Job).where(Job.identity_id == instance.identity_id).order_by(Job.created)) if instance and instance.identity_id else None
+                        if not job:
+                            raise ValueError(instance.reason if instance else "File could not be queued")
+                        job_id, state = job.id, job.state
+                    if state in {"PAUSED", "SKIPPED", "CANCELLED", "REMOVED"}:
+                        result = control_jobs(self.db, [job_id], "resume")["results"][0]
+                        if not result["ok"]:
+                            raise ValueError(result["error"])
+                    results.append({"path": str(path), "ok": True, "message": "Already archived" if state == "COMPLETED" else "Added or already queued"})
+                except (OSError, ValueError) as error:
+                    results.append({"path": raw, "ok": False, "message": str(error) if isinstance(error, ValueError) else "File unavailable"})
+        return {"results": results}
+
     def scan(self, watch_id=None, automatic=False):
         with self.lock:
             with self.db.session() as s:

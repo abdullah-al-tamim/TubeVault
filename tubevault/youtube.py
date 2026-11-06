@@ -48,6 +48,15 @@ class YouTube:
     def playlists(self):
         return self.list_all("playlists", {"part": "snippet,status", "mine": "true", "maxResults": 50})
 
+    def uploaded_videos(self):
+        channels = self.request("GET", "channels", params={"part": "contentDetails", "mine": "true"}).json().get("items", [])
+        if len(channels) != 1:
+            raise APIError("Cannot_verify_connected_channel")
+        uploads = channels[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+        items = self.list_all("playlistItems", {"part": "snippet,contentDetails", "playlistId": uploads, "maxResults": 50})
+        return {"channel_id": channels[0]["id"], "videos": [
+            {"id": item["contentDetails"]["videoId"], "title": item["snippet"]["title"]} for item in items]}
+
     def ensure_playlist(self, mapping, before_create=None):
         if mapping.playlist_id:
             return mapping.playlist_id

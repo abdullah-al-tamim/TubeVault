@@ -26,6 +26,7 @@ def rig(db, video):
     Scanner(db).scan()
     db.configure({"paused": False, "pause_metered": False})
     yt = Mock()
+    yt.uploaded_videos.return_value = {"channel_id":"channel", "videos":[]}
     yt.start.return_value = "https://www.googleapis.com/upload/test"
     yt.probe.return_value = httpx.Response(308)
     yt.chunk.return_value = httpx.Response(200, json={"id": "abcdefghijk"})
@@ -193,3 +194,125 @@ def test_ambiguous_playlist_creation_requires_reconciliation(db, rig):
         assert job.video_id == 'abcdefghijk'
         assert job.error == 'Playlist_creation_uncertain_select_existing_ID'
     assert yt.start.call_count == 1
+
+
+def test_pause_during_final_chunk_retains_video_and_blocks_playlist(db, rig):
+    from tubevault.queue_controls import control_jobs
+    worker, yt, job_id = rig
+    def chunk(*args):
+        assert control_jobs(db, [job_id], "pause")["results"][0]["ok"]
+        return httpx.Response(200, json={"id":"abcdefghijk"})
+    yt.chunk.side_effect = chunk
+    worker.step()
+    with db.session() as s:
+        job = s.get(Job, job_id)
+        assert job.state == "PAUSED"
+        assert job.video_id == "abcdefghijk"
+        assert not job.claimed
+    yt.insert.assert_not_called()
+    control_jobs(db, [job_id], "resume")
+    worker.step()
+    assert yt.start.call_count == 1
+    yt.insert.assert_called_once()
+
+
+def test_cancel_during_upload_error_is_not_retried(db, rig):
+    from tubevault.queue_controls import control_jobs
+    worker, yt, job_id = rig
+    def chunk(*args):
+        control_jobs(db, [job_id], "cancel")
+        raise APIError("network", retryable=True)
+    yt.chunk.side_effect = chunk
+    worker.step()
+    with db.session() as s:
+        assert s.get(Job, job_id).state == "CANCELLED"
+        assert s.get(UploadSession, job_id)
+    assert worker.claim() is None
+
+
+def test_bulk_remove_persists_across_scan_and_can_restore(db, rig):
+    from tubevault.queue_controls import control_jobs
+    worker, yt, job_id = rig
+    result = control_jobs(db, [job_id, "missing"], "remove")
+    assert [r["ok"] for r in result["results"]] == [True, False]
+    Scanner(db).scan()
+    assert worker.claim() is None
+    control_jobs(db, [job_id], "resume")
+    assert worker.claim() == job_id
+
+
+def test_remote_title_duplicate_never_starts_upload(db, rig):
+    worker, yt, job_id = rig
+    with db.session() as s:
+        title=s.get(Job,job_id).title
+    yt.uploaded_videos.return_value={"channel_id":"channel","videos":[{"id":"remotevideo","title":title.upper()}]}
+    worker.step()
+    yt.start.assert_not_called()
+    with db.session() as s:
+        assert s.get(Job,job_id).state=="DUPLICATE_TITLE"
+        assert s.get(Job,job_id).video_id is None
+
+
+def test_title_check_failure_blocks_new_session(db, rig):
+    worker, yt, job_id = rig
+    yt.uploaded_videos.side_effect=APIError("Network interruption",retryable=True)
+    worker.step()
+    yt.start.assert_not_called()
+    with db.session() as s:
+        assert s.get(Job,job_id).state=="FAILED_RETRYABLE"
+
+
+def test_saved_session_resumes_without_new_session(db, rig):
+    worker, yt, job_id = rig
+    yt.chunk.side_effect=APIError("network",retryable=True)
+    worker.step()
+    with db.session() as s:
+        s.get(Job,job_id).next_attempt=0
+    yt.chunk.side_effect=None
+    worker.step()
+    assert yt.start.call_count==1
+
+
+def test_paused_active_video_releases_slot_for_next_job(db, rig):
+    from tubevault.queue_controls import control_jobs
+    worker,yt,job_id=rig
+    with db.session() as s:
+        original=s.get(Job,job_id)
+        other=Job(identity_id=original.identity_id,instance_id=original.instance_id,mapping_id=original.mapping_id,title="Different title")
+        s.add(other);s.flush();other_id=other.id
+    def chunk(*args):
+        control_jobs(db,[job_id],"pause")
+        return httpx.Response(308,headers={"Range":"bytes=0-255"})
+    yt.chunk.side_effect=chunk
+    worker.step()
+    assert db.settings()['paused'] is False
+    assert worker.claim()==other_id
+
+
+def test_local_title_reservation_prevents_second_session(db, rig):
+    worker,yt,job_id=rig
+    with db.session() as s:
+        original=s.get(Job,job_id)
+        original.state="UPLOAD_UNCERTAIN"
+        other=Job(identity_id=original.identity_id,instance_id=original.instance_id,mapping_id=original.mapping_id,title=original.title)
+        s.add(other);s.flush();other_id=other.id
+    worker.step()
+    yt.start.assert_not_called()
+    with db.session() as s:
+        assert s.get(Job,other_id).state=="DUPLICATE_TITLE"
+
+
+def test_partial_session_with_remote_matching_title_is_held(db, rig):
+    worker,yt,job_id=rig
+    yt.chunk.side_effect=APIError("network",retryable=True)
+    worker.step()
+    with db.session() as s:
+        job=s.get(Job,job_id);job.next_attempt=0;title=job.title
+    yt.uploaded_videos.return_value={"channel_id":"channel","videos":[{"id":"otherremote","title":title}]}
+    yt.chunk.reset_mock()
+    worker.step()
+    yt.chunk.assert_not_called()
+    assert yt.start.call_count==1
+    with db.session() as s:
+        assert s.get(Job,job_id).state=="DUPLICATE_TITLE"
+        assert s.get(UploadSession,job_id) is not None

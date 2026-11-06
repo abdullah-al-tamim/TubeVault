@@ -85,6 +85,7 @@ class Job(Base):
     retries: Mapped[int] = mapped_column(default=0)
     next_attempt: Mapped[float] = mapped_column(default=0, index=True)
     claimed: Mapped[bool] = mapped_column(default=False)
+    control_requested: Mapped[str] = mapped_column(default="", server_default="")
     error: Mapped[str] = mapped_column(default="")
     created: Mapped[float] = mapped_column(default=time.time)
 

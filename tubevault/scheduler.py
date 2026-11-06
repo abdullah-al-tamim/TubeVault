@@ -33,14 +33,15 @@ class Scheduler:
 
     def run(self):
         last_scan, last_cost, blocked = 0, 0, False
-        with ThreadPoolExecutor(max_workers=4) as pool:
+        with ThreadPoolExecutor(max_workers=4) as pool, ThreadPoolExecutor(max_workers=1) as scan_pool:
             tasks = []
+            scan_task = None
             while not self.stop.wait(1):
                 try:
                     now = time.time()
-                    if now - last_scan > 30 or self.dirty.is_set() and now - last_scan > 5:
+                    if (scan_task is None or scan_task.done()) and (now - last_scan > 30 or self.dirty.is_set() and now - last_scan > 5):
                         self.dirty.clear()
-                        self.scanner.scan(automatic=True)
+                        scan_task = scan_pool.submit(self.scanner.scan, automatic=True)
                         last_scan = now
                     settings = self.db.settings()
                     if settings["pause_metered"] and now - last_cost > 60:

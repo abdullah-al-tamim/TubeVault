@@ -69,3 +69,28 @@ test("login errors are displayed", async ({ page }) => {
   await page.getByRole("button", { name: "Unlock vault" }).click();
   await expect(page.getByRole("alert")).toHaveText("Invalid password");
 });
+
+
+test("queue selection, bulk pause and upload limit", async ({page})=>{
+ await page.route("**/api/session",r=>r.fulfill({json:{csrf:"test"}}));
+ await page.route("**/api/setup/status",r=>r.fulfill({json:{completed:true,desktop:true}}));
+ const jobs=[{id:"a",title:"First.mp4",playlist:"Camera",state:"QUEUED",size:100,progress:0},{id:"b",title:"Second.mp4",playlist:"Camera",state:"QUEUED",size:100,progress:0}];
+ await page.route("**/api/snapshot",r=>r.fulfill({json:{...snapshot,jobs}}));
+ await page.route("**/api/events",r=>r.fulfill({contentType:"text/event-stream",body:""}));
+ await page.route("**/api/queue/bulk",async r=>{expect(r.request().postDataJSON()).toEqual({ids:["a","b"],action:"pause"});await r.fulfill({json:{results:[{id:"a",ok:true},{id:"b",ok:true}]}});});
+ await page.route("**/api/queue/check-duplicates",r=>r.fulfill({json:{checked:279,held:3,duplicate_titles:[]}}));
+ await page.route("**/api/queue/concurrency",async r=>{expect(r.request().postDataJSON()).toEqual({concurrency:4});await r.fulfill({json:{}});});
+ await page.goto("/");
+ await expect(page.getByRole("heading",{name:"A home for every memory."})).toBeVisible();
+ if(await page.getByRole("button",{name:"Open navigation"}).isVisible()) await page.getByRole("button",{name:"Open navigation"}).click();
+ await page.getByRole("button",{name:/Upload Queue/}).click();
+ await expect(page.getByText(/Up to 1 at a time/)).toBeVisible();
+ await page.getByLabel("Select all shown videos").check();
+ await page.getByRole("button",{name:"Pause selected",exact:true}).click();
+ await expect(page.getByRole("status")).toHaveText("2 video(s): pause requested.");
+ await page.getByRole("button",{name:"Check YouTube for duplicates"}).click();
+ await expect(page.getByRole("status")).toContainText("Held 3 queued videos");
+ await page.getByLabel("Simultaneous uploads").selectOption("4");
+ await page.getByText("Add selected videos manually",{exact:true}).click();
+ await expect(page.getByLabel("Video paths (one per line)")).toBeVisible();
+});

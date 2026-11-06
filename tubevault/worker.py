@@ -40,21 +40,27 @@ class Worker:
         self.stop = threading.Event()
         self.network_blocked = threading.Event()
         self.playlist_lock = threading.Lock()
+        from .duplicates import DuplicateGuard
+        self.duplicates = DuplicateGuard(db, youtube)
 
     def recover(self):
         with self.db.session() as s:
             for job in s.scalars(select(Job).where(Job.claimed == True)):
                 job.claimed = False
-                if job.state == "UPLOADING":
+                if job.state == "UPLOADING" and not s.get(UploadSession, job.id):
+                    transition(s, job, "UPLOAD_UNCERTAIN", "Session initiation outcome unknown")
+                elif job.control_requested and job.state not in {"UPLOAD_UNCERTAIN", "COMPLETED"}:
+                    transition(s, job, job.control_requested, "Recovered pending user control")
+                elif job.state == "UPLOADING":
                     transition(s, job, "UPLOADING", "Recovered; server session will be probed")
 
     def claim(self):
         with self.db.session() as s:
-            job_id = s.scalar(select(Job.id).where(Job.state.in_(ELIGIBLE), Job.claimed == False,
+            job_id = s.scalar(select(Job.id).where(Job.state.in_(ELIGIBLE), Job.claimed == False, Job.control_requested == "",
                                                    Job.next_attempt <= time.time()).order_by(Job.created).limit(1))
             if not job_id:
                 return None
-            result = s.execute(update(Job).where(Job.id == job_id, Job.claimed == False).values(claimed=True))
+            result = s.execute(update(Job).where(Job.id == job_id, Job.claimed == False, Job.control_requested == "", Job.state.in_(ELIGIBLE)).values(claimed=True))
             return job_id if result.rowcount == 1 else None
 
     def step(self):
@@ -86,9 +92,19 @@ class Worker:
                 job.next_attempt = time.time() + 120
         finally:
             with self.db.session() as s:
-                s.get(Job, job_id).claimed = False
+                current = s.get(Job, job_id)
+                current.claimed = False
+                if current.control_requested and current.state not in {"UPLOAD_UNCERTAIN", "COMPLETED"}:
+                    transition(s, current, current.control_requested, "Stopped after current operation; progress retained")
+                    current.speed = 0
+
+    def interrupted(self, job_id):
+        with self.db.session() as s:
+            return bool(s.get(Job, job_id).control_requested) or self.stop.is_set() or self.network_blocked.is_set() or not allowed(self.db.settings())
 
     def run(self, job_id):
+        if self.interrupted(job_id):
+            return
         with self.db.session() as s:
             job = s.get(Job, job_id)
             instance, identity = s.get(Instance, job.instance_id), s.get(Identity, job.identity_id)
@@ -104,14 +120,22 @@ class Worker:
             st = path.stat()
             if (st.st_size, st.st_mtime_ns) != (instance.size, instance.mtime_ns) or digest(path) != identity.sha256:
                 raise APIError("Source_changed")
+            if self.interrupted(job_id):
+                return
             if not session:
                 # Commit intent before external side effect. A crash before URI persistence is ambiguous.
                 if job.state == "UPLOADING":
                     with self.db.session() as s:
                         transition(s, s.get(Job, job_id), "UPLOAD_UNCERTAIN", "Session initiation outcome unknown")
                     return
-                with self.db.session() as s:
-                    transition(s, s.get(Job, job_id), "UPLOADING")
+                with self.duplicates.lock:
+                    inventory = self.duplicates.inventory()
+                    if self.duplicates.match(job_id, inventory):
+                        return
+                    if self.interrupted(job_id):
+                        return
+                    with self.db.session() as s:
+                        transition(s, s.get(Job, job_id), "UPLOADING")
                 try:
                     uri = self.youtube.start(job, identity.size)
                     secret_key = "upload-" + job_id
@@ -128,6 +152,8 @@ class Worker:
                     if isinstance(e, APIError) and e.quota:
                         self.db.configure({"cooldown": time.time() + 86400})
                     return
+            if self.interrupted(job_id):
+                return
             uri = self.secrets.get(session.secret_key)
             if not uri:
                 with self.db.session() as s:
@@ -137,9 +163,13 @@ class Worker:
                 transition(s, s.get(Job, job_id), "UPLOADING", "Probing saved session")
             response = self.youtube.probe(uri, identity.size)
             offset, video_id = self.ack(response, identity.size)
+            if not video_id:
+                with self.duplicates.lock:
+                    if self.duplicates.match(job_id, self.duplicates.inventory(), include_session=True):
+                        return
             with path.open("rb") as source:
                 while not video_id and offset < identity.size:
-                    if self.stop.is_set() or self.network_blocked.is_set() or not allowed(self.db.settings()):
+                    if self.interrupted(job_id):
                         return
                     with self.db.session() as s:
                         if s.get(Job, job_id).state in {"PAUSED", "SKIPPED"}:
@@ -170,6 +200,8 @@ class Worker:
                 s.merge(Video(id=video_id, identity_id=identity.id, account_id=account.id, privacy=job.privacy))
                 transition(s, current, "PROCESSING")
             job.video_id = video_id
+        if self.interrupted(job_id):
+            return
         video = self.youtube.video(job.video_id)
         if video["snippet"]["channelId"] != account.id:
             raise APIError("Video_channel_mismatch")
@@ -186,7 +218,11 @@ class Worker:
                 current.next_attempt = time.time() + 60
                 return
             transition(s, current, "PLAYLIST_PENDING")
+        if self.interrupted(job_id):
+            return
         with self.playlist_lock:
+            if self.interrupted(job_id):
+                return
             with self.db.session() as s:
                 mapping = s.get(Mapping, job.mapping_id)
             intent_key = "playlist-intent-" + mapping.id
@@ -202,6 +238,8 @@ class Worker:
                 intent = s.get(Setting, intent_key)
                 if intent:
                     s.delete(intent)
+            if self.interrupted(job_id):
+                return
             self.youtube.insert(playlist_id, job.video_id)
         with self.db.session() as s:
             transition(s, s.get(Job, job_id), "COMPLETED")

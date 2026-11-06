@@ -15,9 +15,20 @@ from .config import config as default_config
 from .security import Security
 from .scanner import Scanner
 from .imports import Imports
+from .queue_controls import control_jobs
 
 Privacy = Literal["private", "unlisted", "public"]
 
+
+class BulkControl(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=2000)
+    action: Literal["pause", "resume", "retry", "skip", "cancel", "remove"]
+
+class ConcurrencyInput(BaseModel):
+    concurrency: int = Field(ge=1, le=4)
+
+class ManualFiles(BaseModel):
+    paths: list[str] = Field(min_length=1, max_length=500)
 
 class Login(BaseModel):
     password: str = Field(max_length=1024)
@@ -311,36 +322,58 @@ def create_app(config=default_config, db=None, services=None, background=True, d
         db.configure(body.model_dump())
         return db.settings()
 
+    @api.post("/queue/check-duplicates")
+    def check_duplicates():
+        from .duplicates import DuplicateGuard
+        from .youtube import APIError
+        guard = getattr(worker, "duplicates", None) or DuplicateGuard(db, youtube)
+        try:
+            return guard.review_queue()
+        except APIError as e:
+            raise HTTPException(409, "YouTube title check failed: " + e.reason) from None
+
+    @api.post("/queue/bulk")
+    def bulk(body: BulkControl):
+        return control_jobs(db, body.ids, body.action)
+
+    @api.put("/queue/concurrency")
+    def concurrency(body: ConcurrencyInput):
+        db.configure({"concurrency": body.concurrency})
+        return db.settings()
+
+    @api.post("/queue/add-files")
+    def add_files(body: ManualFiles, request: Request):
+        if request.client.host not in {"127.0.0.1", "::1", "testclient"}:
+            raise HTTPException(403, "Choose files on the Windows PC")
+        return scanner.add_files(body.paths)
+
+    @api.post("/desktop/files")
+    def choose_files():
+        if not desktop:
+            raise HTTPException(400, "File picker requires the desktop app")
+        return {"paths": desktop.choose_files()}
+
     @api.post("/queue/{action}")
     def queue(action: Literal["pause", "resume"]):
         db.configure({"paused": action == "pause"})
         return db.settings()
 
     @api.post("/jobs/{job_id}/{action}")
-    def control(job_id: str, action: Literal["pause", "resume", "retry", "exclude", "force"]):
+    def control(job_id: str, action: Literal["pause", "resume", "retry", "exclude", "force", "skip", "cancel", "remove"]):
         with db.session() as s:
             job = s.get(Job, job_id)
             if not job:
                 raise HTTPException(404)
-            if job.claimed:
-                raise HTTPException(409, "Pause the queue and wait for the current chunk to finish")
-            if job.state == "UPLOAD_UNCERTAIN":
-                raise HTTPException(409, "Reconcile the uncertain upload with a verified video ID")
             if action == "force":
-                if job.state != "COMPLETED":
+                if job.claimed or job.state != "COMPLETED":
                     raise HTTPException(409, "Only completed uploads may be explicitly duplicated")
-                new = Job(identity_id=job.identity_id, instance_id=job.instance_id, mapping_id=job.mapping_id,
-                          title=job.title, description=job.description, privacy=job.privacy, tags=job.tags, made_for_kids=job.made_for_kids)
-                s.add(new)
+                s.add(Job(identity_id=job.identity_id, instance_id=job.instance_id, mapping_id=job.mapping_id,
+                          title=job.title, description=job.description, privacy=job.privacy, tags=job.tags, made_for_kids=job.made_for_kids))
                 return {"ok": True}
-            if job.state == "COMPLETED":
-                raise HTTPException(409, "Already completed")
-            target = {"pause": "PAUSED", "exclude": "SKIPPED"}.get(action)
-            if not target:
-                target = "PROCESSING" if job.video_id else "UPLOADING" if s.get(UploadSession, job.id) else "QUEUED"
-            transition(s, job, target, "User action")
-            job.next_attempt = 0
-            return {"ok": True}
+        result = control_jobs(db, [job_id], action)["results"][0]
+        if not result["ok"]:
+            raise HTTPException(409, result["error"])
+        return result
 
     @api.put("/jobs/{job_id}/metadata")
     def metadata(job_id: str, body: Metadata):
@@ -348,7 +381,7 @@ def create_app(config=default_config, db=None, services=None, background=True, d
             job = s.get(Job, job_id)
             if not job:
                 raise HTTPException(404)
-            if job.claimed or job.video_id or job.state not in {"QUEUED", "PAUSED"}:
+            if job.claimed or job.video_id or job.state not in {"QUEUED", "PAUSED", "DUPLICATE_TITLE"}:
                 raise HTTPException(409, "Metadata is locked after upload begins")
             for key, value in body.model_dump().items():
                 setattr(job, key, value)
