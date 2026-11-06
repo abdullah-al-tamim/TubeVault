@@ -4,12 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tubevault"
-version = "0.1.0"
+version = "0.2.0"
 requires-python = ">=3.12"
 dependencies = ["fastapi>=0.115,<1", "uvicorn>=0.32,<1", "sqlalchemy>=2.0,<3", "alembic>=1.14,<2", "httpx>=0.28,<1", "google-auth-oauthlib>=1.2,<2", "keyring>=25,<26", "watchdog>=6,<7", "pydantic-settings>=2.7,<3", "filelock>=3.16,<4", "tzdata>=2025.1"]
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10", "pytest-cov>=6,<8"]
+desktop = ["pywebview>=6,<7", "pystray>=0.19,<1", "pillow>=11,<14"]
+build = ["pyinstaller>=6,<7"]
 
 [tool.setuptools.packages.find]
 include = ["tubevault*"]

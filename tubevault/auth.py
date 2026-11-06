@@ -39,6 +39,18 @@ class Auth:
     def connected(self):
         return bool(self.secrets.get("google"))
 
+    def client_ready(self):
+        return bool(self.secrets.get('oauth-client')) or self.config.client_secret.is_file()
+
+    def client_config(self):
+        from .setup_service import validate_client
+        stored = self.secrets.get('oauth-client')
+        if stored:
+            return validate_client(json.loads(stored))
+        if self.config.client_secret.is_file():
+            return validate_client(json.loads(self.config.client_secret.read_text(encoding='utf-8-sig')))
+        raise ValueError('Import your Desktop OAuth JSON using the Google setup guide first.')
+
     def token(self):
         with self.lock:
             raw = self.secrets.get("google")
@@ -55,8 +67,10 @@ class Auth:
             raise RuntimeError("Connection already in progress")
         try:
             logging.getLogger("google_auth_oauthlib.flow").disabled = True
-            flow = InstalledAppFlow.from_client_secrets_file(str(self.config.client_secret), [SCOPE], autogenerate_code_verifier=True)
+            flow = InstalledAppFlow.from_client_config(self.client_config(), [SCOPE], autogenerate_code_verifier=True)
+            settings = self.db.settings()
             credentials = flow.run_local_server(host="127.0.0.1", port=0, timeout_seconds=180,
+                                              login_hint=settings.get('preferred_email', ''), prompt='consent',
                                               authorization_prompt_message="Complete authorization in your browser.",
                                               success_message="TubeVault connected. You may close this window.")
             import httpx

@@ -21,6 +21,10 @@ class Security:
         if not secrets.compare_digest(self.password, hashlib.sha256(password.encode()).digest()):
             self.failures[key].append(now)
             raise HTTPException(401, "Invalid password")
+        return self.issue()
+
+    def issue(self):
+        now = time.time()
         token, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         self.sessions = {k: v for k, v in self.sessions.items() if v[1] > now}
         self.sessions[token] = (csrf, now + 12 * 3600)

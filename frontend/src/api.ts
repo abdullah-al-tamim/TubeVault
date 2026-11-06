@@ -1,4 +1,13 @@
 let csrf = "";
+let sessionRequest: Promise<any> | undefined;
+export function restoreSession() {
+  if (!sessionRequest) {
+    const ticket = new URLSearchParams(location.hash.slice(1)).get('desktop');
+    if (ticket) history.replaceState(null, '', location.pathname + location.search);
+    sessionRequest = ticket ? api('/desktop/session', 'POST', {ticket}) : api('/session');
+  }
+  return sessionRequest;
+}
 export function setCsrf(value: string) {
   csrf = value;
 }

@@ -26,7 +26,8 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "./components/ui/button";
-import { api, setCsrf, transfer } from "./api";
+import { api, setCsrf, transfer, restoreSession } from "./api";
+import { SetupGuide, type SetupStatus } from './components/SetupGuide';
 import { bytes, percent } from "./lib/utils";
 import "./styles.css";
 
@@ -72,6 +73,8 @@ const pages = [
   ["Diagnostics", Terminal],
 ] as const;
 function App() {
+  const [setupStatus, setSetupStatus] = useState<SetupStatus|null>(null);
+  const [showGuide, setShowGuide] = useState(false);
   const [signed, setSigned] = useState(false),
     [password, setPassword] = useState(""),
     [data, setData] = useState<Snapshot | null>(null),
@@ -88,7 +91,7 @@ function App() {
     [edit, setEdit] = useState<Job | null>(null);
   const load = async () => setData(await api("/snapshot"));
   useEffect(() => {
-    api("/session")
+    restoreSession()
       .then((s) => {
         setCsrf(s.csrf);
         setSigned(true);
@@ -97,6 +100,7 @@ function App() {
   }, []);
   useEffect(() => {
     if (!signed) return;
+    api<SetupStatus>('/setup/status').then(s=>{setSetupStatus(s);if(!s.completed)setShowGuide(true);}).catch(()=>{});
     load().catch((e) => setError(e.message));
     const stream = new EventSource("/api/events");
     stream.onmessage = (e) => setData(JSON.parse(e.data));
@@ -854,6 +858,7 @@ function App() {
           )}
           {page === "Settings" && settings && (
             <div className="settings-grid">
+              <section className="panel settings-panel"><h2>Getting started & desktop</h2><p>Connect Google, choose folders and configure automatic backups with the setup guide.</p><Button onClick={()=>setShowGuide(true)}>Open setup guide</Button>{setupStatus?.desktop&&<label className="check" style={{marginTop:20}}><input type="checkbox" checked={setupStatus.startup_enabled} onChange={e=>run(async()=>{await api('/desktop/startup','PUT',{enabled:e.target.checked});setSetupStatus(await api('/setup/status'));})}/> Start at Windows sign-in</label>}</section>
               <section className="panel settings-panel">
                 <h2>YouTube account</h2>
                 <p>{data?.account?.name || "No channel connected"}</p>
@@ -888,11 +893,7 @@ function App() {
               />
               <section className="panel settings-panel">
                 <h2>Security & access</h2>
-                <p>
-                  Localhost by default. A password is required for every device.
-                  Configure explicit LAN hosts, origins and HTTPS before phone
-                  access.
-                </p>
+                <p>The desktop window signs in securely using your Windows account. Browser access requires a separate session. The desktop server listens on localhost only.</p>
                 <Button
                   variant="outline"
                   onClick={() =>
@@ -948,6 +949,7 @@ function App() {
           </footer>
         </div>
       </main>
+      {showGuide && <SetupGuide onClose={()=>{setShowGuide(false);api<SetupStatus>('/setup/status').then(setSetupStatus).catch(()=>{});}} onChange={load}/>}
       {add && (
         <div
           className="modal"

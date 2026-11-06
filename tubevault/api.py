@@ -75,11 +75,26 @@ class ReconcileInput(BaseModel):
     video_id: str = Field(pattern=r"^[A-Za-z0-9_-]{11}$")
 
 
+class DesktopTicket(BaseModel):
+    ticket: str = Field(min_length=20, max_length=200)
+
+
+class SetupPreferences(BaseModel):
+    preferred_email: str = Field(default='', max_length=254)
+    expected_channel: str = Field(default='', max_length=100)
+    automatic: bool = False
+    startup: bool = True
+
+
+class StartupInput(BaseModel):
+    enabled: bool
+
+
 def rowdict(row):
     return {c.name: getattr(row, c.name) for c in row.__table__.columns}
 
 
-def create_app(config=default_config, db=None, services=None, background=True):
+def create_app(config=default_config, db=None, services=None, background=True, desktop=None):
     config.data_dir.mkdir(parents=True, exist_ok=True)
     db = db or Database(config.data_dir / "tubevault.db")
     if len(config.password) < 16:
@@ -131,6 +146,78 @@ def create_app(config=default_config, db=None, services=None, background=True):
         return {"csrf": csrf}
 
     api = APIRouter(prefix="/api", dependencies=[Depends(security.check)])
+
+    if desktop:
+        @app.post('/api/desktop/session')
+        def desktop_session(body: DesktopTicket, request: Request, response: Response):
+            if request.client.host not in {'127.0.0.1', '::1', 'testclient'} or request.headers.get('origin') not in security.origins:
+                raise HTTPException(403, 'Desktop origin rejected')
+            if not desktop.consume_ticket(body.ticket):
+                raise HTTPException(401, 'Desktop sign-in expired. Reopen TubeVault from the tray.')
+            token, csrf = security.issue()
+            response.set_cookie('tv_session', token, httponly=True, samesite='strict', max_age=43200)
+            return {'csrf': csrf}
+
+        @app.post('/api/desktop/show')
+        def desktop_show(request: Request):
+            import secrets
+            if request.client.host not in {'127.0.0.1', '::1'} or not secrets.compare_digest(request.headers.get('x-desktop-key', ''), desktop.native_key):
+                raise HTTPException(403)
+            desktop.show()
+            return {'ok': True}
+
+    from .setup_service import SetupService
+    setup = SetupService(db, auth, desktop)
+
+    @api.get('/setup/status')
+    def setup_status():
+        return setup.status()
+
+    @api.put('/setup/client')
+    def import_client(document: dict, request: Request):
+        if request.client.host not in {'127.0.0.1', '::1', 'testclient'}:
+            raise HTTPException(403, 'Import credentials on the Windows PC')
+        try:
+            return setup.import_client(document)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+
+    @api.put('/setup/preferences')
+    def setup_preferences(body: SetupPreferences):
+        db.configure({'preferred_email': body.preferred_email.strip(), 'expected_channel': body.expected_channel.strip()})
+        return {'ok': True}
+
+    @api.post('/setup/complete')
+    def complete_setup(body: SetupPreferences):
+        status = setup.status()
+        if body.automatic and (not status['connected'] or status['watch_count'] == 0):
+            raise HTTPException(409, 'Connect your channel and choose a folder before enabling automatic uploads.')
+        if desktop:
+            desktop.set_startup(body.startup)
+        db.configure({'onboarding_completed': True, 'mode': 'automatic' if body.automatic else 'manual',
+                      'paused': not body.automatic, 'preferred_email': body.preferred_email.strip(),
+                      'expected_channel': body.expected_channel.strip()})
+        return setup.status()
+
+    @api.post('/desktop/folder')
+    def choose_folder():
+        if not desktop:
+            raise HTTPException(409, 'Native folder picker is available in the desktop app')
+        return {'path': desktop.choose_folder()}
+
+    @api.post('/desktop/google-console')
+    def open_google_console():
+        if not desktop:
+            raise HTTPException(409, 'Open https://console.cloud.google.com/apis/credentials in your browser')
+        desktop.open_google()
+        return {'ok': True}
+
+    @api.put('/desktop/startup')
+    def startup(body: StartupInput):
+        if not desktop:
+            raise HTTPException(409, 'Available in the installed desktop app')
+        desktop.set_startup(body.enabled)
+        return {'enabled': desktop.startup_enabled()}
 
     @api.get("/session")
     def session(request: Request):
@@ -347,7 +434,8 @@ def create_app(config=default_config, db=None, services=None, background=True):
             raise HTTPException(409, str(e)) from None
 
     app.include_router(api)
-    dist = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+    from .paths import resource_root
+    dist = resource_root() / "frontend" / "dist"
 
     @app.get("/{path:path}")
     def frontend(path: str):
