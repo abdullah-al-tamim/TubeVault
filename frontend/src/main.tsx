@@ -342,7 +342,7 @@ function App() {
           <ShieldCheck size={19} />
           <div>
             <strong>Originals stay original</strong>
-            <small>No compression. No source deletion.</small>
+            <small>No compression or automatic deletion.</small>
           </div>
         </div>
         <div className="account">

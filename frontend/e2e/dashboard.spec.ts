@@ -26,7 +26,7 @@ test("authenticated dashboard and responsive navigation", async ({ page }) => {
     page.getByRole("heading", { name: "A home for every memory." }),
   ).toBeVisible();
   await expect(
-    page.getByText("No compression. No source deletion."),
+    page.getByText("No compression or automatic deletion."),
   ).toBeAttached();
   if (await page.getByRole("button", { name: "Open navigation" }).isVisible())
     await page.getByRole("button", { name: "Open navigation" }).click();
@@ -93,4 +93,31 @@ test("queue selection, bulk pause and upload limit", async ({page})=>{
  await page.getByLabel("Simultaneous uploads").selectOption("4");
  await page.getByText("Add selected videos manually",{exact:true}).click();
  await expect(page.getByLabel("Video paths (one per line)")).toBeVisible();
+});
+
+test("cleanup requires explicit confirmation for reviewed originals", async ({ page }) => {
+  await page.route("**/api/session", route => route.fulfill({ json: { csrf: "test" } }));
+  await page.route("**/api/setup/status", route => route.fulfill({ json: { completed: true } }));
+  await page.route("**/api/snapshot", route => route.fulfill({ json: snapshot }));
+  await page.route("**/api/events", route => route.fulfill({ contentType: "text/event-stream", body: "" }));
+  await page.route("**/api/cleanup", async route => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ json: [{ id: "original", path: "Camera/clip.mp4", size: 4096, video_id: "abcdefghijk" }] });
+      return;
+    }
+    expect(route.request().postDataJSON()).toEqual({ ids: ["original"], confirmation: "DELETE ORIGINALS" });
+    await route.fulfill({ json: [{ id: "original", ok: true }] });
+  });
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "A home for every memory." })).toBeVisible();
+  if (await page.getByRole("button", { name: "Open navigation" }).isVisible())
+    await page.getByRole("button", { name: "Open navigation" }).click();
+  await page.getByRole("button", { name: "Archive History", exact: true }).click();
+  await page.getByRole("button", { name: "Review uploaded originals" }).click();
+  await page.getByRole("button", { name: "Select all eligible originals" }).click();
+  const deleteButton = page.getByRole("button", { name: "Permanently delete 1 original(s)", exact: true });
+  await expect(deleteButton).toBeDisabled();
+  await page.getByLabel("Type DELETE ORIGINALS to confirm").fill("DELETE ORIGINALS");
+  await deleteButton.click();
+  await expect(page.getByRole("status")).toHaveText("Deleted 1 local original(s).");
 });
