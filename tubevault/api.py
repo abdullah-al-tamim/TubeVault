@@ -82,6 +82,11 @@ class ImportInput(BaseModel):
     size: int
 
 
+class CleanupInput(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=2000)
+    confirmation: Literal["DELETE ORIGINALS"]
+
+
 class ReconcileInput(BaseModel):
     video_id: str = Field(pattern=r"^[A-Za-z0-9_-]{11}$")
 
@@ -321,6 +326,24 @@ def create_app(config=default_config, db=None, services=None, background=True, d
             raise HTTPException(400, "Unknown timezone") from None
         db.configure(body.model_dump())
         return db.settings()
+
+    from .cleanup import Cleanup
+    cleanup = Cleanup(db, youtube, scanner)
+
+    @api.get("/cleanup")
+    def cleanup_preview(request: Request):
+        if request.client.host not in {"127.0.0.1", "::1"}:
+            raise HTTPException(403, "Cleanup is available on this PC only")
+        return cleanup.preview()
+
+    @api.post("/cleanup")
+    def cleanup_delete(body: CleanupInput, request: Request):
+        if request.client.host not in {"127.0.0.1", "::1"}:
+            raise HTTPException(403, "Cleanup is available on this PC only")
+        try:
+            return cleanup.delete(body.ids)
+        except ValueError as error:
+            raise HTTPException(409, str(error)) from None
 
     @api.post("/queue/check-duplicates")
     def check_duplicates():

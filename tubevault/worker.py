@@ -1,15 +1,15 @@
-import random
 import threading
 import time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from sqlalchemy import select, update
-from .db import Job, Instance, Identity, Mapping, UploadSession, Video, Account, Attempt, Notification, Setting, transition
+from .db import Job, Instance, Identity, Mapping, UploadSession, Video, Account, Attempt, Event, Notification, Setting, transition
 from .scanner import digest
 from .youtube import APIError
 
-ELIGIBLE = ["QUEUED", "UPLOADING", "PROCESSING", "PLAYLIST_PENDING", "FAILED_RETRYABLE"]
+ELIGIBLE = ["QUEUED", "UPLOADING", "PROCESSING", "PLAYLIST_PENDING", "FAILED_RETRYABLE", "UPLOAD_UNCERTAIN"]
+RETRY_SECONDS = 300
 
 
 def allowed(settings, now=None):
@@ -48,11 +48,18 @@ class Worker:
             for job in s.scalars(select(Job).where(Job.claimed == True)):
                 job.claimed = False
                 if job.state == "UPLOADING" and not s.get(UploadSession, job.id):
-                    transition(s, job, "UPLOAD_UNCERTAIN", "Session initiation outcome unknown")
+                    self.wait_for_retry(s, job, "Upload setup was interrupted before transfer", "UPLOAD_UNCERTAIN")
                 elif job.control_requested and job.state not in {"UPLOAD_UNCERTAIN", "COMPLETED"}:
                     transition(s, job, job.control_requested, "Recovered pending user control")
                 elif job.state == "UPLOADING":
                     transition(s, job, "UPLOADING", "Recovered; server session will be probed")
+
+    @staticmethod
+    def wait_for_retry(s, job, reason, state="FAILED_RETRYABLE"):
+        job.next_attempt = time.time() + RETRY_SECONDS
+        job.retries += 1
+        job.speed = 0
+        transition(s, job, state, reason)
 
     def claim(self):
         with self.db.session() as s:
@@ -75,21 +82,22 @@ class Worker:
         except APIError as e:
             with self.db.session() as s:
                 job = s.get(Job, job_id)
-                job.retries += 1
-                job.next_attempt = time.time() + min(3600, 2 ** min(job.retries, 11)) + random.uniform(0, 5)
-                state = "FAILED_RETRYABLE" if e.retryable or e.quota else "FAILED_PERMANENT"
-                if not job.video_id and e.reason in {"http_404", "http_410"}:
-                    state = "UPLOAD_UNCERTAIN"
-                transition(s, job, state, e.reason)
+                if job.state == "UPLOAD_UNCERTAIN":
+                    self.wait_for_retry(s, job, "YouTube verification paused: " + e.reason, job.state)
+                elif not job.video_id and s.get(UploadSession, job.id) and e.status in {404, 410}:
+                    self.wait_for_retry(s, job, "Upload session expired; checking YouTube for completion", "UPLOAD_UNCERTAIN")
+                elif e.retryable or e.quota:
+                    self.wait_for_retry(s, job, e.reason)
+                else:
+                    transition(s, job, "FAILED_PERMANENT", e.reason)
                 s.add(Attempt(job_id=job.id, reason=e.reason))
-            if e.quota:
-                self.db.configure({"cooldown": time.time() + 86400})
+            if e.quota or e.reason in {"Google sign-in expired; reconnect in Settings", "Google sign-in required; connect in Settings"}:
+                self.db.configure({"cooldown": time.time() + RETRY_SECONDS, "cooldown_reason": e.reason})
         except Exception as e:
-            # Class names aid diagnosis without leaking HTTP URLs/tokens or OAuth responses.
             with self.db.session() as s:
                 job = s.get(Job, job_id)
-                transition(s, job, "FAILED_RETRYABLE", type(e).__name__)
-                job.next_attempt = time.time() + 120
+                state = "UPLOAD_UNCERTAIN" if job.state == "UPLOAD_UNCERTAIN" else "FAILED_RETRYABLE"
+                self.wait_for_retry(s, job, "Temporary error: " + type(e).__name__, state)
         finally:
             with self.db.session() as s:
                 current = s.get(Job, job_id)
@@ -115,6 +123,27 @@ class Worker:
                 raise APIError("Channel_mismatch")
             job.account_id = account.id
             session = s.get(UploadSession, job_id)
+        if job.state == "UPLOAD_UNCERTAIN":
+            # Older builds committed this audit event before probing or sending any bytes.
+            # Require a recorded setup and no transfer checkpoint before discarding a lost session.
+            with self.db.session() as s:
+                events = set(s.scalars(select(Event.message).where(
+                    Event.job_id == job.id, Event.kind == "transition")))
+                never_sent = not job.video_id and not job.progress and (
+                    session is None or (
+                        session.offset == 0 and not self.secrets.get(session.secret_key)
+                        and any(message.endswith("UPLOADING: ") for message in events)
+                        and not any(message.endswith("Probing saved session") for message in events)
+                    ))
+                if never_sent:
+                    if session:
+                        s.delete(s.get(UploadSession, job_id))
+                    transition(s, s.get(Job, job_id), "QUEUED", "Retrying upload setup; no video bytes were sent")
+            if not never_sent:
+                self.verify_completion(job, account, identity)
+                return
+            session = None
+            job.state = "QUEUED"
         if not job.video_id:
             path = Path(instance.path)
             st = path.stat()
@@ -126,7 +155,7 @@ class Worker:
                 # Commit intent before external side effect. A crash before URI persistence is ambiguous.
                 if job.state == "UPLOADING":
                     with self.db.session() as s:
-                        transition(s, s.get(Job, job_id), "UPLOAD_UNCERTAIN", "Session initiation outcome unknown")
+                        self.wait_for_retry(s, s.get(Job, job_id), "Upload setup was interrupted before transfer", "UPLOAD_UNCERTAIN")
                     return
                 with self.duplicates.lock:
                     inventory = self.duplicates.inventory()
@@ -143,21 +172,19 @@ class Worker:
                     with self.db.session() as s:
                         s.add(UploadSession(job_id=job_id, secret_key=secret_key))
                     session = UploadSession(job_id=job_id, secret_key=secret_key, offset=0)
+                except APIError as error:
+                    if error.retryable or error.quota:
+                        self.db.configure({"cooldown": time.time() + RETRY_SECONDS, "cooldown_reason": error.reason})
+                    raise
                 except Exception as e:
-                    with self.db.session() as s:
-                        if isinstance(e, APIError) and (e.quota or not e.retryable):
-                            transition(s, s.get(Job, job_id), "FAILED_RETRYABLE" if e.quota else "FAILED_PERMANENT", e.reason)
-                        else:
-                            transition(s, s.get(Job, job_id), "UPLOAD_UNCERTAIN", "Session creation could not be confirmed")
-                    if isinstance(e, APIError) and e.quota:
-                        self.db.configure({"cooldown": time.time() + 86400})
-                    return
+                    # Session setup sends metadata only. No bytes were transferred.
+                    raise APIError("Could not save upload session: " + type(e).__name__, retryable=True) from None
             if self.interrupted(job_id):
                 return
             uri = self.secrets.get(session.secret_key)
             if not uri:
                 with self.db.session() as s:
-                    transition(s, s.get(Job, job_id), "UPLOAD_UNCERTAIN", "Session credential missing")
+                    self.wait_for_retry(s, s.get(Job, job_id), "Saved session unavailable; checking YouTube for completion", "UPLOAD_UNCERTAIN")
                 return
             with self.db.session() as s:
                 transition(s, s.get(Job, job_id), "UPLOADING", "Probing saved session")
@@ -245,6 +272,27 @@ class Worker:
             transition(s, s.get(Job, job_id), "COMPLETED")
             if self.db.settings()["notifications"]:
                 s.add(Notification(message=f"Archived {job.title}"))
+
+    def verify_completion(self, job, account, identity):
+        inventory = self.duplicates.inventory()
+        matches = [video for video in inventory["videos"] if video.get("job_id") == job.id]
+        if len(matches) == 1:
+            video = self.youtube.video(matches[0]["id"])
+            snippet = video["snippet"]
+            if snippet["channelId"] != account.id or f"TubeVault job {job.id}" not in snippet.get("description", "").splitlines():
+                matches = []
+        with self.db.session() as s:
+            current = s.get(Job, job.id)
+            if len(matches) != 1:
+                reason = ("Several YouTube videos match this upload" if matches else
+                          "Saved session unavailable and YouTube has not confirmed completion")
+                self.wait_for_retry(s, current, reason, "UPLOAD_UNCERTAIN")
+                return
+            video = matches[0]
+            current.video_id, current.progress = video["id"], identity.size
+            s.merge(Video(id=video["id"], identity_id=identity.id, account_id=account.id, privacy=job.privacy))
+            current.next_attempt = 0
+            transition(s, current, "PROCESSING", "Existing upload found on YouTube")
 
     @staticmethod
     def ack(response, size):

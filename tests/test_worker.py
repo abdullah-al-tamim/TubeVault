@@ -294,6 +294,8 @@ def test_local_title_reservation_prevents_second_session(db, rig):
     with db.session() as s:
         original=s.get(Job,job_id)
         original.state="UPLOAD_UNCERTAIN"
+        original.next_attempt=10**12
+        s.add(UploadSession(job_id=job_id, secret_key="unknown"))
         other=Job(identity_id=original.identity_id,instance_id=original.instance_id,mapping_id=original.mapping_id,title=original.title)
         s.add(other);s.flush();other_id=other.id
     worker.step()
@@ -316,3 +318,99 @@ def test_partial_session_with_remote_matching_title_is_held(db, rig):
     with db.session() as s:
         assert s.get(Job,job_id).state=="DUPLICATE_TITLE"
         assert s.get(UploadSession,job_id) is not None
+
+
+
+def test_setup_failure_waits_five_minutes_and_retries(db, rig):
+    import time
+    worker, yt, job_id = rig
+    yt.start.side_effect = APIError("Network interruption", retryable=True)
+    worker.step()
+    with db.session() as s:
+        job = s.get(Job, job_id)
+        assert job.state == "FAILED_RETRYABLE"
+        assert 295 < job.next_attempt - time.time() <= 300
+        assert s.get(UploadSession, job_id) is None
+        job.next_attempt = 0
+    db.configure({"cooldown": 0})
+    yt.start.side_effect = None
+    worker.step()
+    with db.session() as s:
+        assert s.get(Job, job_id).state == "COMPLETED"
+
+
+def test_missing_session_with_transfer_evidence_never_restarts(db, rig):
+    worker, yt, job_id = rig
+    yt.chunk.side_effect = APIError("Network interruption", retryable=True)
+    worker.step()
+    worker.secrets.values.clear()
+    with db.session() as s:
+        s.get(Job, job_id).next_attempt = 0
+    worker.step()
+    with db.session() as s:
+        s.get(Job, job_id).next_attempt = 0
+    worker.step()
+    assert yt.start.call_count == 1
+    with db.session() as s:
+        assert s.get(Job, job_id).state == "UPLOAD_UNCERTAIN"
+
+
+def test_legacy_missing_session_before_transfer_can_restart(db, rig):
+    from tubevault.db import transition
+    worker, yt, job_id = rig
+    with db.session() as s:
+        job = s.get(Job, job_id)
+        transition(s, job, "UPLOADING")
+        s.add(UploadSession(job_id=job_id, secret_key="missing"))
+        transition(s, job, "UPLOAD_UNCERTAIN", "Session credential missing")
+    worker.step()
+    yt.start.assert_called_once()
+    with db.session() as s:
+        assert s.get(Job, job_id).state == "COMPLETED"
+
+
+def test_recovers_completed_video_by_exact_marker(db, rig):
+    worker, yt, job_id = rig
+    with db.session() as s:
+        job = s.get(Job, job_id)
+        job.state = "UPLOAD_UNCERTAIN"
+        s.add(UploadSession(job_id=job_id, secret_key="missing"))
+    yt.uploaded_videos.return_value = {"channel_id": "channel", "videos": [
+        {"id": "existing", "title": "clip", "job_id": job_id}]}
+    yt.video.return_value["snippet"]["description"] = f"TubeVault job {job_id}"
+    worker.step()
+    yt.start.assert_not_called()
+    with db.session() as s:
+        assert s.get(Job, job_id).video_id == "existing"
+        assert s.get(Job, job_id).state == "PROCESSING"
+
+
+
+def test_cleanup_verifies_remote_and_local_before_unlink(db, rig, video):
+    from tubevault.cleanup import Cleanup
+    from tubevault.db import Instance
+    worker, yt, job_id = rig
+    worker.step()
+    db.configure({"paused": True})
+    cleanup = Cleanup(db, yt, Scanner(db))
+    candidate, = cleanup.preview()
+    assert video.exists()
+    yt.video.return_value["status"]["uploadStatus"] = "processed"
+    assert not cleanup.delete([candidate["id"]])[0]["ok"]
+    assert video.exists()
+    yt.video.return_value["snippet"]["description"] = f"TubeVault job {job_id}"
+    original = video.read_bytes()
+    original_stat = video.stat()
+    import os
+    video.write_bytes(b"X" + original[1:])
+    os.utime(video, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    assert not cleanup.delete([candidate["id"]])[0]["ok"]
+    assert video.exists()
+    video.write_bytes(original)
+    os.utime(video, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    assert cleanup.delete([candidate["id"]])[0]["ok"]
+    assert not video.exists()
+    assert not cleanup.preview()
+    with db.session() as s:
+        assert s.get(Job, job_id).state == "COMPLETED"
+        assert s.get(Instance, candidate["id"]) is not None

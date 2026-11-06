@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { Button } from "./components/ui/button";
 import { api, setCsrf, transfer, restoreSession } from "./api";
+import { CleanupPanel } from "./components/CleanupPanel";
 import { QueuePanel } from "./components/QueuePanel";
 import { SetupGuide, type SetupStatus } from './components/SetupGuide';
 import { bytes, percent } from "./lib/utils";
@@ -160,19 +161,8 @@ function App() {
         </Button>
       )}
       {j.state === "UPLOAD_UNCERTAIN" ? (
-        <Button
-          variant="outline"
-          onClick={() => {
-            const id = prompt(
-              "Paste the video ID from YouTube Studio. Its description must contain this job marker.",
-            );
-            if (id)
-              run(() =>
-                api(`/jobs/${j.id}/reconcile`, "POST", { video_id: id }),
-              );
-          }}
-        >
-          Reconcile
+        <Button variant="outline" onClick={() => run(() => api(`/jobs/${j.id}/retry`, "POST"))}>
+          Check again
         </Button>
       ) : (
         j.state !== "COMPLETED" && (
@@ -235,7 +225,7 @@ function App() {
                 <span
                   className={`badge ${j.state === "COMPLETED" ? "green" : j.state.startsWith("FAILED") || j.state === "UPLOAD_UNCERTAIN" ? "red" : ""}`}
                 >
-                  {j.state.replaceAll("_", " ").toLowerCase()}
+                  {(j.state === "UPLOAD_UNCERTAIN" ? "Waiting to check YouTube" : j.state.replaceAll("_", " ")).toLowerCase()}
                 </span>
               </td>
               <td>
@@ -630,6 +620,7 @@ function App() {
             </>
           )}
           {page === "Upload Queue" && <QueuePanel jobs={jobs} settings={settings} desktop={!!setupStatus?.desktop} refresh={load} details={id=>actions(jobs.find(j=>j.id===id)!)}/>}
+          {page === "Archive History" && !data?.preview && <CleanupPanel paused={!!settings?.paused} />}
           {page === "Archive History" && (
             <section className="panel">
               <div className="panel-heading">

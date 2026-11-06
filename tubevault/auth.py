@@ -20,14 +20,15 @@ class Secrets:
         self.service = "TubeVault-" + hashlib.sha256(str((data_dir or config.data_dir).resolve()).encode()).hexdigest()[:16]
 
     def get(self, key):
-        return keyring.get_password(self.service, key)
+        return keyring.get_password(f"{self.service}-{key}", key) or keyring.get_password(self.service, key)
 
     def set(self, key, value):
-        keyring.set_password(self.service, key, value)
+        keyring.set_password(f"{self.service}-{key}", key, value)
 
     def delete(self, key):
-        if self.get(key):
-            keyring.delete_password(self.service, key)
+        for service in (f"{self.service}-{key}", self.service):
+            if keyring.get_password(service, key):
+                keyring.delete_password(service, key)
 
 
 class Auth:
@@ -55,7 +56,8 @@ class Auth:
         with self.lock:
             raw = self.secrets.get("google")
             if not raw:
-                raise RuntimeError("Connect a YouTube channel in Settings")
+                from .youtube import APIError
+                raise APIError("Google sign-in required; connect in Settings", retryable=True)
             credentials = Credentials.from_authorized_user_info(json.loads(raw), [SCOPE])
             if not credentials.valid:
                 credentials.refresh(Request())

@@ -4,9 +4,10 @@ import httpx
 
 
 class APIError(Exception):
-    def __init__(self, reason, retryable=False, quota=False):
+    def __init__(self, reason, retryable=False, quota=False, status=None):
         super().__init__(reason)
         self.reason, self.retryable, self.quota = reason, retryable, quota
+        self.status = status or (int(reason[5:]) if re.fullmatch(r"http_\d{3}", reason) else None)
 
 
 class YouTube:
@@ -19,7 +20,14 @@ class YouTube:
         parsed = urlparse(url)
         if parsed.scheme != "https" or parsed.hostname != "www.googleapis.com":
             raise APIError("Invalid upload session host")
-        headers = kwargs.pop("headers", {}) | {"Authorization": "Bearer " + self.auth.token()}
+        from google.auth.exceptions import RefreshError, TransportError
+        try:
+            token = self.auth.token()
+        except RefreshError:
+            raise APIError("Google sign-in expired; reconnect in Settings", retryable=True) from None
+        except TransportError:
+            raise APIError("Could not reach Google sign-in", retryable=True) from None
+        headers = kwargs.pop("headers", {}) | {"Authorization": "Bearer " + token}
         try:
             response = self.client.request(method, url, headers=headers, **kwargs)
         except httpx.HTTPError:
@@ -34,7 +42,7 @@ class YouTube:
         # Only a constrained error code is persisted; never response bodies or URLs.
         reason = re.sub(r"[^a-zA-Z0-9_]", "", reason)[:80]
         quota = reason in {"quotaExceeded", "dailyLimitExceeded", "uploadLimitExceeded"}
-        raise APIError(reason, response.status_code >= 500 or response.status_code in (408, 429) or reason in {"rateLimitExceeded", "userRateLimitExceeded"}, quota)
+        raise APIError(reason, response.status_code >= 500 or response.status_code in (408, 429) or reason in {"rateLimitExceeded", "userRateLimitExceeded"}, quota, response.status_code)
 
     def list_all(self, endpoint, params):
         result, token = [], None
@@ -54,8 +62,13 @@ class YouTube:
             raise APIError("Cannot_verify_connected_channel")
         uploads = channels[0]["contentDetails"]["relatedPlaylists"]["uploads"]
         items = self.list_all("playlistItems", {"part": "snippet,contentDetails", "playlistId": uploads, "maxResults": 50})
-        return {"channel_id": channels[0]["id"], "videos": [
-            {"id": item["contentDetails"]["videoId"], "title": item["snippet"]["title"]} for item in items]}
+        videos = []
+        for item in items:
+            snippet = item["snippet"]
+            marker = re.search(r"(?m)^TubeVault job ([a-f0-9]{32})\r?$", snippet.get("description", ""))
+            videos.append({"id": item["contentDetails"]["videoId"], "title": snippet["title"],
+                           "job_id": marker.group(1) if marker else None})
+        return {"channel_id": channels[0]["id"], "videos": videos}
 
     def ensure_playlist(self, mapping, before_create=None):
         if mapping.playlist_id:
@@ -83,7 +96,10 @@ class YouTube:
             json={"snippet": {"title": job.title, "description": job.description + "\nTubeVault job " + job.id,
                               "tags": job.tags, "categoryId": "22"},
                   "status": {"privacyStatus": job.privacy, "selfDeclaredMadeForKids": job.made_for_kids}})
-        return response.headers["Location"]
+        location = response.headers.get("Location")
+        if not location:
+            raise APIError("YouTube did not return an upload session", retryable=True)
+        return location
 
     def probe(self, uri, size):
         return self.request("PUT", uri, headers={"Content-Range": f"bytes */{size}", "Content-Length": "0"}, content=b"")

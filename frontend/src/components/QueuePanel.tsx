@@ -12,6 +12,7 @@ type QueueJob = {
   playlist: string;
   error: string;
   claimed?: boolean;
+  next_attempt?: number;
   control_requested?: string;
 };
 export function QueuePanel({
@@ -95,6 +96,11 @@ export function QueuePanel({
           {settings?.paused ? "Start queue" : "Pause entire queue"}
         </Button>
       </div>
+      {settings?.cooldown > Date.now() / 1000 && (
+        <p className="queue-tools" role="status">
+          Uploads waiting until {new Date(settings.cooldown * 1000).toLocaleTimeString()} · {settings.cooldown_reason || "YouTube limit"}
+        </p>
+      )}
       <div className="queue-tools">
         <Button
           disabled={busy}
@@ -288,8 +294,15 @@ export function QueuePanel({
                 <td>
                   {j.control_requested && j.claimed
                     ? `${j.control_requested} requested…`
-                    : j.state}
+                    : j.control_requested || (j.state === "UPLOAD_UNCERTAIN" ? "Waiting to check YouTube"
+                      : j.state === "FAILED_RETRYABLE" ? "Waiting to retry" : j.state)}
                   {j.error && <small>{j.error}</small>}
+                  {!j.control_requested && (j.state === "UPLOAD_UNCERTAIN" || j.state === "FAILED_RETRYABLE") && (
+                    <small>{settings?.paused ? "Start the queue to enable automatic checks."
+                      : (j.next_attempt ?? 0) > Date.now() / 1000
+                        ? `Next check at ${new Date(j.next_attempt! * 1000).toLocaleTimeString()}`
+                        : "Check due when the queue can run"}</small>
+                  )}
                 </td>
                 <td>
                   {percent(j.progress, j.size)}% · {bytes(j.progress)} /{" "}

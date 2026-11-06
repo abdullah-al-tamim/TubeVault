@@ -11,10 +11,18 @@ def control_jobs(db, ids, action):
             error = None
             if not job:
                 error = "Video not found"
-            elif job.state in {"COMPLETED", "UPLOAD_UNCERTAIN"}:
-                error = "Completed videos cannot be changed; uncertain uploads must be reconciled"
+            elif job.state == "COMPLETED":
+                error = "Completed videos cannot be changed"
+            elif job.state == "UPLOAD_UNCERTAIN":
+                if action in HOLD:
+                    job.control_requested = HOLD[action]
+                elif job.claimed:
+                    error = "A YouTube verification check is already running"
+                else:
+                    job.control_requested = ""
+                    job.next_attempt = 0
             elif job.state == "UPLOADING" and not job.claimed and not s.get(UploadSession, job.id):
-                error = "Session initiation outcome unknown; wait for recovery and reconcile"
+                error = "Upload setup is being recovered; try again shortly"
             elif action in HOLD:
                 job.control_requested = HOLD[action]
                 # Persist the hold even if the worker is releasing its claim concurrently.
