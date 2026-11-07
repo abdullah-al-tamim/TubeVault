@@ -108,9 +108,25 @@ class DesktopHost:
             db.configure({'paused': not db.settings()['paused']})
         self.tray = pystray.Icon('TubeVault', Image.open(resource_root() / 'assets' / 'tubevault.ico'), 'TubeVault — personal video archive',
             menu=pystray.Menu(pystray.MenuItem('Open TubeVault', lambda *_: self.show(), default=True),
+                pystray.MenuItem('Recover access', lambda *_: self.show()),
                 pystray.MenuItem(lambda _: 'Resume uploads' if db.settings()['paused'] else 'Pause uploads', pause),
                 pystray.MenuItem('Quit TubeVault', lambda *_: self.quit())))
         threading.Thread(target=self.tray.run, daemon=True).start()
+
+
+
+class DesktopSessionBridge:
+    """Issue a one-use session ticket only to this app's own native window."""
+    def __init__(self, host):
+        self._host = host
+
+    def recover_session(self):
+        from urllib.parse import urlsplit
+        current = urlsplit(self._host.window.get_current_url() or "")
+        expected = urlsplit(self._host.url)
+        if (current.scheme, current.netloc) != (expected.scheme, expected.netloc):
+            raise RuntimeError("Open the local TubeVault window to recover access")
+        return {"ticket": self._host.ticket()}
 
 
 def main():
@@ -179,7 +195,7 @@ def main():
         (data_dir / 'runtime.json').write_text(json.dumps({'port': port, 'pid': os.getpid()}))
         import webview
         host.window = webview.create_window('TubeVault', host.url + '/#desktop=' + host.ticket(),
-            width=1320, height=880, min_size=(900, 640), background_color='#0c131a', hidden=args.background)
+            width=1320, height=880, min_size=(900, 640), background_color='#0c131a', hidden=args.background, js_api=DesktopSessionBridge(host))
         host.window.events.closing += host.closing
         host.start_tray(db)
         webview.start(gui='edgechromium', private_mode=True)

@@ -121,3 +121,17 @@ test("cleanup requires explicit confirmation for reviewed originals", async ({ p
   await deleteButton.click();
   await expect(page.getByRole("status")).toHaveText("Deleted 1 local original(s).");
 });
+
+
+test("desktop recovery unlocks an expired session without a password", async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as any).pywebview = {api: {recover_session: async () => ({ticket:"native-test-ticket"})}};
+  });
+  await page.route("**/api/session", r => r.fulfill({status:401,json:{detail:"Sign in required"}}));
+  await page.route("**/api/desktop/session", r => r.fulfill({json:{csrf:"recovered"}}));
+  await page.route("**/api/setup/status", r => r.fulfill({json:{completed:true}}));
+  await page.route("**/api/snapshot", r => r.fulfill({json:snapshot}));
+  await page.route("**/api/events", r => r.fulfill({contentType:"text/event-stream",body:""}));
+  await page.goto("/");
+  await expect(page.getByRole("heading",{name:"A home for every memory."})).toBeVisible();
+});

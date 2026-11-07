@@ -1,6 +1,6 @@
 # Windows desktop app
 
-Run `artifacts/TubeVault-Setup-0.2.3.exe` to install for the current Windows user. Python and Node are bundled or unnecessary at runtime. Microsoft Edge WebView2 must be installed. The installer adds Start menu and desktop shortcuts and offers background startup at Windows sign-in.
+Run `artifacts/TubeVault-Setup-0.2.4.exe` to install for the current Windows user. Python and Node are bundled or unnecessary at runtime. Microsoft Edge WebView2 must be installed. The installer adds Start menu and desktop shortcuts and offers background startup at Windows sign-in.
 
 The first launch opens a four-step guide: Google credentials, channel connection, watch folders, and automatic uploading. The guide is also available from Settings. Credentials are stored in Windows Credential Manager. Each user supplies their own Google Desktop OAuth client; credentials are never bundled in the public app.
 
@@ -38,3 +38,5 @@ Browse videos adds only selected files. Files modified within the last 60 second
 Before every new upload session the connected channel uploads playlist is read, with pagination, and titles are compared after Unicode normalization, case folding and whitespace normalization. Matching titles are held as DUPLICATE_TITLE, not marked complete. Existing sessions resume using their saved URI. The queue also offers Check YouTube for duplicates. A failed title check blocks starting a new session. Title matching is conservative and does not prove identical video content; renamed copies cannot be detected by title alone.
 
 Archive History > Free up space reviews completed local originals. Deletion is permanent and requires a paused queue, a selected list, and typing DELETE ORIGINALS. Each file is checked against the processed YouTube archive and its recorded SHA-256 before removal. YouTube re-encodes videos. Keep a separate copy if you need the original file.
+
+Desktop access recovery uses the native window and Windows account. If a session expires, choose Forgot password? Recover access or tray > Recover access. A new one-use ticket restores the session. Browser-only deployments require the PC owner to reset the local TUBEVAULT_PASSWORD configuration and restart the server.

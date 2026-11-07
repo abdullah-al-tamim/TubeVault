@@ -26,7 +26,7 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "./components/ui/button";
-import { api, setCsrf, transfer, restoreSession } from "./api";
+import { api, setCsrf, transfer, restoreSession, recoverDesktopSession } from "./api";
 import { CleanupPanel } from "./components/CleanupPanel";
 import { QueuePanel } from "./components/QueuePanel";
 import { SetupGuide, type SetupStatus } from './components/SetupGuide';
@@ -107,7 +107,12 @@ function App() {
     const stream = new EventSource("/api/events");
     stream.onmessage = (e) => setData(JSON.parse(e.data));
     stream.onerror = () => {
-      api("/session").catch(() => setSigned(false));
+      api("/session").catch(() => {
+        recoverDesktopSession().then(session => {
+          setCsrf(session.csrf);
+          load().catch(error => setError(error.message));
+        }).catch(() => setSigned(false));
+      });
     };
     return () => stream.close();
   }, [signed]);
@@ -297,6 +302,13 @@ function App() {
               Unlock vault <ArrowUpRight size={17} />
             </Button>
           </form>
+          <Button variant="outline" disabled={busy} onClick={() => run(async () => {
+            const session = await recoverDesktopSession();
+            setCsrf(session.csrf);
+            setSigned(true);
+            setPassword("");
+          })}>Forgot password? Recover access</Button>
+          <p>The installed desktop app uses your Windows account to recover access. Reopen it from the tray if sign-in expires.</p>
           {error && (
             <p role="alert" className="error-text">
               {error}

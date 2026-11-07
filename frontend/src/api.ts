@@ -1,10 +1,22 @@
 let csrf = "";
 let sessionRequest: Promise<any> | undefined;
+type NativeWindow = Window & { pywebview?: { api?: { recover_session: () => Promise<{ticket:string}> } } };
+export async function recoverDesktopSession() {
+  const bridge = (window as NativeWindow).pywebview?.api;
+  if (!bridge) throw new Error("Open TubeVault from its desktop shortcut or tray, then choose Recover access. For a browser-only installation, ask the PC owner to reset TUBEVAULT_PASSWORD in its local configuration and restart the server.");
+  const {ticket} = await bridge.recover_session();
+  return api<{csrf:string}>('/desktop/session', 'POST', {ticket});
+}
 export function restoreSession() {
   if (!sessionRequest) {
     const ticket = new URLSearchParams(location.hash.slice(1)).get('desktop');
     if (ticket) history.replaceState(null, '', location.pathname + location.search);
-    sessionRequest = ticket ? api('/desktop/session', 'POST', {ticket}) : api('/session');
+    sessionRequest = (ticket ? api('/desktop/session', 'POST', {ticket}) : api('/session'))
+      .catch(async error => {
+        if ((window as NativeWindow).pywebview?.api) return recoverDesktopSession();
+        throw error;
+      });
+    sessionRequest.catch(() => { sessionRequest = undefined; });
   }
   return sessionRequest;
 }

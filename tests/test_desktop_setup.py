@@ -89,3 +89,19 @@ def test_legacy_vault_migration_preserves_db_and_protected_credentials(db,tmp_pa
     assert (source/'tubevault.db').exists()
     assert (target/'tubevault.db').exists()
     migrate_legacy(source,target,lambda p:stores[p])
+
+
+
+def test_native_recovery_requires_local_window(tmp_path):
+    from tubevault.desktop import DesktopSessionBridge
+    host = DesktopHost(tmp_path, MemorySecrets())
+    host.url = "http://127.0.0.1:8765"
+    host.window = Mock()
+    bridge = DesktopSessionBridge(host)
+    host.window.get_current_url.return_value = "https://example.com"
+    with pytest.raises(RuntimeError):
+        bridge.recover_session()
+    host.window.get_current_url.return_value = host.url + "/"
+    ticket = bridge.recover_session()["ticket"]
+    assert host.consume_ticket(ticket)
+    assert not host.consume_ticket(ticket)
