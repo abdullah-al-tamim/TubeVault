@@ -82,6 +82,12 @@ class ImportInput(BaseModel):
     size: int
 
 
+class PhoneStart(BaseModel):
+    address: str
+    collection: str = Field(default="iPhone memories", min_length=1, max_length=150)
+    trusted_wifi: Literal[True]
+
+
 class CleanupInput(BaseModel):
     ids: list[str] = Field(min_length=1, max_length=2000)
     confirmation: Literal["DELETE ORIGINALS"]
@@ -131,11 +137,16 @@ def create_app(config=default_config, db=None, services=None, background=True, d
     else:
         auth, youtube, worker, scheduler = services
 
+    from .phone_receiver import PhoneReceiver, lan_addresses
+    phone = PhoneReceiver(imports, scanner) if desktop else None
+
     @asynccontextmanager
     async def lifespan(app):
         if background:
             scheduler.start()
         yield
+        if phone:
+            phone.stop()
         if background:
             await asyncio.to_thread(scheduler.close)
 
@@ -453,6 +464,40 @@ def create_app(config=default_config, db=None, services=None, background=True, d
         auth.disconnect()
         return {"ok": True}
 
+    def desktop_receiver(request):
+        if not phone or request.client.host not in {"127.0.0.1", "::1", "testclient"}:
+            raise HTTPException(403, "Open Receive from iPhone on your Windows PC")
+        return phone
+
+    @api.get("/phone/status")
+    def phone_status(request: Request):
+        receiver = desktop_receiver(request)
+        return receiver.status() | {"queue_paused": db.settings()["paused"],
+                                    "folder": str(imports.root)}
+
+    @api.get("/phone/networks")
+    def phone_networks(request: Request):
+        desktop_receiver(request)
+        try:
+            return lan_addresses()
+        except (ValueError, OSError):
+            raise HTTPException(409, "Connect the PC to your private Wi-Fi or Ethernet, then try again.") from None
+
+    @api.post("/phone/start")
+    def phone_start(body: PhoneStart, request: Request):
+        receiver = desktop_receiver(request)
+        try:
+            if body.address not in {network["address"] for network in lan_addresses()}:
+                raise ValueError("This connection changed. Refresh the network list.")
+            return receiver.start(body.address, body.collection)
+        except (ValueError, OSError) as error:
+            raise HTTPException(409, str(error) if isinstance(error, ValueError) else "Could not start receiving") from None
+
+    @api.post("/phone/stop")
+    def phone_stop(request: Request):
+        desktop_receiver(request).stop()
+        return {"ok": True}
+
     @api.post("/imports")
     def create_import(body: ImportInput):
         try:
@@ -484,7 +529,7 @@ def create_app(config=default_config, db=None, services=None, background=True, d
     def finish(transfer_id: str):
         try:
             destination = imports.finish(transfer_id)
-            scanner.scan()
+            scanner.scan_import(destination, imports.root)
             return {"destination": destination}
         except ValueError as e:
             raise HTTPException(409, str(e)) from None

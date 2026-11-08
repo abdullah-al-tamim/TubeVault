@@ -3,7 +3,7 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 root = Path(SPECPATH).parent
 web_data, web_bins, web_hidden = collect_all('webview')
-data = web_data + [(str(root/'frontend'/'dist'), 'frontend/dist'), (str(root/'migrations'), 'migrations'), (str(root/'assets'), 'assets')]
+data = web_data + [(str(root/'frontend'/'dist'), 'frontend/dist'), (str(root/'migrations'), 'migrations'), (str(root/'assets'), 'assets'), (str(root/'phone'), 'phone')]
 a = Analysis([str(root/'desktop_entry.py')], pathex=[str(root)], binaries=web_bins, datas=data,
     hiddenimports=web_hidden + collect_submodules('keyring.backends') + collect_submodules('uvicorn') + ['pystray._win32','google.auth.transport.requests','sqlalchemy.dialects.sqlite'],
     excludes=['pytest','tkinter','IPython','matplotlib','PyQt5','PyQt6','PySide2','PySide6'])

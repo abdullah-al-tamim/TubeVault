@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Send to TubeVault</title><link rel="stylesheet" href="/phone.css"><script src="/phone.js" defer></script></head>
+<body><main>
+<div class="brand">TubeVault <span>iPhone transfer</span></div>
+<h1>Your videos, on your PC.</h1>
+<p id="connection" role="status">Connecting to your PC…</p>
+<section id="sender" hidden>
+<p id="collection"></p>
+<label class="pick">Choose videos<input id="videos" type="file" accept="video/*,.mov,.mp4,.m4v" multiple></label>
+<p id="selection">Choose one or several videos from your photo library.</p>
+<button id="send" disabled>Send to PC</button>
+<button id="cancel" hidden>Pause transfer</button>
+<div id="progress" aria-live="polite"></div>
+<p>Keep Safari open and your phone awake until copying finishes. Once saved, the PC handles YouTube uploads.</p>
+<p>Interrupted? Select the same videos again to continue copying. iOS may export a converted copy depending on your Photos settings.</p>
+</section>
+<p class="notice">Use your own trusted Wi-Fi. This local transfer uses HTTP and is not encrypted. The QR link authorizes uploads to this receiving session.</p>
+</main></body></html>

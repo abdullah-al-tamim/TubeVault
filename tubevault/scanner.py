@@ -36,6 +36,20 @@ class Scanner:
     def __init__(self, db):
         self.db, self.lock = db, threading.Lock()
 
+    def scan_import(self, path, root):
+        """Queue an atomically completed phone import without scanning other roots."""
+        path, root = Path(path).resolve(strict=True), Path(root).resolve(strict=True)
+        if not path.is_relative_to(root) or not path.is_file():
+            raise ValueError("Imported video is outside the inbox")
+        with self.lock:
+            with self.db.session() as s:
+                watch = s.scalar(select(Watch).where(Watch.path == str(root)))
+            if watch is None or not watch.enabled:
+                return
+            # Imports.finish has already verified and atomically published the whole file.
+            watch.stability = 0
+            self._file(watch, root, path, self.db.settings())
+
     def add_files(self, paths):
         from .queue_controls import control_jobs
         results = []

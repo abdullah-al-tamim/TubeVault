@@ -70,6 +70,11 @@ def test_protected_desktop_setup_and_client_import(db, tmp_path):
         assert client.post('/api/queue/add-files',json={'paths':['missing.mp4']},headers=headers).status_code == 200
         assert client.put('/api/queue/concurrency',json={'concurrency':4},headers=headers).status_code == 200
         assert db.settings()['concurrency'] == 4
+        assert client.get('/api/phone/status').json()['active'] is False
+        assert client.post('/api/phone/start', json={'address':'192.168.1.20','trusted_wifi':False}, headers=headers).status_code == 422
+        assert client.post('/api/phone/start', json={'address':'192.168.1.20'}, headers=headers).status_code == 422
+        assert client.post('/api/phone/start', json={'address':'192.168.1.20','trusted_wifi':True}, headers={'Origin':'https://evil.example','X-CSRF-Token':headers['X-CSRF-Token']}).status_code == 403
+
         assert client.put('/api/queue/concurrency',json={'concurrency':359},headers=headers).status_code == 422
 
 

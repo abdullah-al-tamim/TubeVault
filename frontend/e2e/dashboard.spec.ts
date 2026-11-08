@@ -33,6 +33,7 @@ test("authenticated dashboard and responsive navigation", async ({ page }) => {
   await page
     .getByRole("button", { name: "iPhone Imports", exact: true })
     .click();
+  await page.getByText("Import videos selected on this PC", {exact:true}).click();
   await expect(
     page.getByRole("heading", { name: "Keep the original. Bring it home." }),
   ).toBeVisible();
@@ -134,4 +135,33 @@ test("desktop recovery unlocks an expired session without a password", async ({ 
   await page.route("**/api/events", r => r.fulfill({contentType:"text/event-stream",body:""}));
   await page.goto("/");
   await expect(page.getByRole("heading",{name:"A home for every memory."})).toBeVisible();
+});
+
+
+test("iPhone receiving requires trusted Wi-Fi and displays a pairing code", async ({ page }) => {
+  await page.route("**/api/session", route => route.fulfill({json:{csrf:"test"}}));
+  await page.route("**/api/setup/status", route => route.fulfill({json:{completed:true,desktop:true}}));
+  await page.route("**/api/snapshot", route => route.fulfill({json:snapshot}));
+  await page.route("**/api/events", route => route.fulfill({contentType:"text/event-stream",body:""}));
+  let active = false;
+  await page.route("**/api/phone/networks", route => route.fulfill({json:[{address:"192.168.1.20",name:"Wi-Fi"}]}));
+  await page.route("**/api/phone/status", route => route.fulfill({json:{active,paired:false,completed:0,collection:"iPhone memories",queue_paused:true,expires:Date.now()/1000+43200,pair_expires:Date.now()/1000+600}}));
+  await page.route("**/api/phone/start", async route => {
+    expect(route.request().postDataJSON()).toEqual({address:"192.168.1.20",collection:"iPhone memories",trusted_wifi:true});
+    active = true;
+    await route.fulfill({json:{active:true,qr:"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB",url:"http://192.168.1.20:8766/#pair=test"}});
+  });
+  await page.route("**/api/phone/stop", async route => {active=false;await route.fulfill({json:{ok:true}});});
+  await page.goto("/");
+  await expect(page.getByRole("heading",{name:"A home for every memory."})).toBeVisible();
+  if(await page.getByRole("button",{name:"Open navigation"}).isVisible()) await page.getByRole("button",{name:"Open navigation"}).click();
+  await page.getByRole("button",{name:"iPhone Imports",exact:true}).click();
+  const start=page.getByRole("button",{name:"Start receiving",exact:true});
+  await expect(start).toBeDisabled();
+  await page.getByLabel("I trust this Wi-Fi. Local transfers use HTTP and are not encrypted.").check();
+  await start.click();
+  await expect(page.getByAltText("Scan with your iPhone Camera to pair with TubeVault")).toBeVisible();
+  await expect(page.getByRole("button",{name:"Start YouTube queue"})).toBeVisible();
+  await page.getByRole("button",{name:"Stop receiving",exact:true}).click();
+  await expect(start).toBeVisible();
 });

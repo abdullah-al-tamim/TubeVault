@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { Button } from "./components/ui/button";
 import { api, setCsrf, transfer, restoreSession, recoverDesktopSession } from "./api";
+import { PhoneReceiverPanel } from "./components/PhoneReceiverPanel";
 import { CleanupPanel } from "./components/CleanupPanel";
 import { QueuePanel } from "./components/QueuePanel";
 import { SetupGuide, type SetupStatus } from './components/SetupGuide';
@@ -774,7 +775,9 @@ function App() {
           )}
           {page === "iPhone Imports" && (
             <>
-              <section className="panel import-panel">
+              {setupStatus?.desktop && <PhoneReceiverPanel refresh={load} />}
+              <details className="panel"><summary className="queue-tools">Import videos selected on this PC</summary>
+              <section className="import-panel">
                 <Smartphone size={36} />
                 <h2>Keep the original. Bring it home.</h2>
                 <p>
@@ -818,11 +821,10 @@ function App() {
                   </div>
                 ))}
                 <p className="muted">
-                  Interrupted? Select the same original file and collection to
-                  resume. Windows SMB inbox is also supported; see
-                  IPHONE_SETUP.md.
+                  Select the same file and collection to resume an interrupted copy.
                 </p>
               </section>
+              </details>
               <section className="panel">
                 <div className="panel-heading">
                   <h2>Incoming transfers</h2>

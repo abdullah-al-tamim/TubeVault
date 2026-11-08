@@ -26,6 +26,7 @@ def test_import_retry_exact_bytes_and_duplicate_finish(db, video, tmp_path):
     service.append(transfer, 100, original[100:])
     target = service.finish(transfer)
     assert Path(target).read_bytes() == original
+    assert not (service.temp / transfer).exists()
     assert service.finish(transfer) == target
     assert video.read_bytes() == original
 
@@ -56,3 +57,26 @@ def test_login_rate_limit(db, tmp_path):
         for _ in range(10):
             assert client.post('/api/login', json={"password": "wrong"}, headers={"Origin": "http://testserver"}).status_code == 401
         assert client.post('/api/login', json={"password": "wrong"}, headers={"Origin": "http://testserver"}).status_code == 429
+
+
+
+def test_completed_phone_import_queues_immediately_without_other_roots(db, video, tmp_path):
+    from sqlalchemy import select
+    from tubevault.db import Job, Instance, Watch
+    from tubevault.scanner import Scanner
+
+    imports = Imports(db, tmp_path / "phone-inbox")
+    transfer = imports.create("phone.mov", "iPhone memories", video.stat().st_size)
+    imports.append(transfer, 0, video.read_bytes())
+    target = imports.finish(transfer)
+    with db.session() as session:
+        session.add(Watch(path=str(video.parents[1]), stability=0))
+    scanner = Scanner(db)
+    scanner.scan_import(target, imports.root)
+    scanner.scan_import(target, imports.root)
+    with db.session() as session:
+        jobs = list(session.scalars(select(Job)))
+        assert len(jobs) == 1
+        assert session.get(Instance, jobs[0].instance_id).path == target
+        assert session.scalar(select(Watch).where(Watch.path == str(imports.root))).stability == 30
+    assert Path(target).read_bytes() == video.read_bytes()

@@ -1,35 +1,34 @@
-# iPhone 13 imports
+# Send videos from iPhone over Wi-Fi
 
-The Windows PC must be on and reachable. Both workflows preserve the bytes supplied by iOS; TubeVault does not re-encode them. iOS Photos export/share settings can convert media before TubeVault receives it. Choose **Keep Originals** where available and verify an exported file if exact camera-original bytes are essential.
+1. Open TubeVault on the PC and choose **iPhone Imports**.
+2. Connect the iPhone and PC to the same trusted home network. Ethernet on the PC also works when connected to that router.
+3. Under **Receive from iPhone**, select the PC connection and destination collection.
+4. Read and check the trusted Wi-Fi option, then click **Start receiving**.
+5. Scan the QR code with the iPhone Camera. Open its local link in Safari within ten minutes.
+6. Tap **Choose videos**, select your videos, then **Send to PC**.
+7. Keep Safari open and the phone awake until the page confirms the videos are saved.
+8. Click **Stop receiving** on the PC when finished.
 
-## A. Dedicated Windows SMB inbox
+TubeVault stores complete files in its local inbox before queuing them. If the YouTube queue is enabled, it uploads them under the current concurrency, schedule, network and quota settings. If paused, use **Start YouTube queue** on the PC. This also enables existing queued jobs.
 
-1. Start TubeVault once so `data\inbox` exists. Create collection subfolders within it.
-2. Use Windows folder Properties → Sharing → Advanced Sharing to share **only** `data\inbox` as `TubeVaultInbox`.
-3. Grant read/write access to a dedicated password-protected Windows account, not Everyone/Guest. Keep NTFS permissions equally narrow. Do not share the project root, system drive or your full video library.
-4. On a trusted private network, enable Windows file/printer sharing only for the Private profile and restrict firewall scope to the local subnet. Never configure router port forwarding or public-profile SMB access.
-5. On iPhone: Files → Browse → menu → Connect to Server → `smb://YOUR-PC-NAME/TubeVaultInbox`. Authenticate with the dedicated Windows account.
-6. Copy videos into a collection subfolder. TubeVault waits for size/mtime stability, checks the container, hashes and deduplicates, then queues the file. Set a long stability delay for slow SMB copies; incomplete containers may be rejected by YouTube and remain local for inspection.
+## Local copies and interruptions
 
-## B. Authenticated mobile web
+The receiver copies in 4 MiB chunks and commits the received offset to SQLite. If a copy is interrupted, select the same original files again in the same Safari receiving session and tap Send to PC. Completed imports are checked and deduplicated. After the PC restarts, receiving is disabled and a new QR pairing is required. An unfinished file may need to be copied again after a restart or after Safari clears session storage.
 
-The default localhost address is intentionally unreachable from a phone. For LAN use, choose a stable PC LAN IP or hostname and configure `.env` explicitly:
+TubeVault preserves the bytes iOS supplies. Photos may convert a video when exporting it depending on your iPhone settings. If camera-original bytes are essential, choose Keep Originals in the relevant iPhone transfer/export settings.
 
-```dotenv
-TUBEVAULT_HOST=0.0.0.0
-TUBEVAULT_ALLOWED_HOSTS=localhost,127.0.0.1,192.168.1.20
-TUBEVAULT_ORIGINS=http://127.0.0.1:8765,http://localhost:8765,https://192.168.1.20
-TUBEVAULT_SECURE_COOKIE=true
-```
+The phone can disconnect once copying is complete. YouTube uploading continues from the PC while it is awake and online. Local originals remain until you explicitly delete eligible files under **Archive History > Free up space**. Successful transfers release their temporary staging hardlink, so later cleanup can reclaim the file's storage.
 
-Use a local HTTPS reverse proxy with a certificate trusted by the iPhone and the exact external HTTPS origin listed above. Proxy to the loopback backend, allow streaming SSE, allow 8 MiB requests, and set sufficient request timeouts. Prefer leaving the backend bound to `127.0.0.1` when using a proxy. Restrict the proxy firewall rule to your trusted Private LAN. TLS certificate provisioning is a manual deployment step; no certificate or firewall rule is installed by this project. Plain HTTP can be used only as a deliberate temporary test on an isolated trusted LAN with `SECURE_COOKIE=false`; it does not protect passwords or footage in transit.
+## Network access
 
-Open the HTTPS address in Safari, sign in, then choose **iPhone Imports**. Choose a collection and multiple original video files. Transfers are sequential 4 MiB chunks. Server progress is durable; retry by selecting the same original file and collection. The browser remembers the transfer ID using filename, size and last-modified metadata. If iOS returns different metadata, the UI may create another import; full SHA-256 deduplication still prevents an automatic duplicate YouTube upload.
+The full TubeVault dashboard remains bound to localhost. Start receiving opens a separate upload-only HTTP server on the selected private IPv4 interface and an automatically chosen port. Each QR invitation has a random single-use secret. A paired phone gets upload access for up to twelve hours or until Stop receiving. It can access only files it created during that session.
 
-Keep Safari foregrounded and the phone awake. iOS may suspend transfers when Safari is closed, the screen locks, memory pressure occurs or the network changes. There is no indefinite background-transfer guarantee. Browser tests use a phone-sized viewport; they do not substitute for real Safari testing.
+HTTP does not encrypt video content or pairing credentials in transit. Use this feature only on a trusted private network. The desktop screen requires explicit acknowledgement before opening the receiver. No Google credentials or dashboard sessions are sent to the phone. Stop receiving revokes its access. Receiving is disabled after app restart.
 
-The server uses safe generated destination prefixes to avoid collisions, never silently overwrites an existing file and retains incoming originals. `.transfers` files are hardlinks to ingested originals on NTFS. Automatic cleanup is intentionally disabled; a retention-policy UI is not yet implemented. Do not delete pending transfers. Completed transfer hardlinks may be removed manually only after checking `INGESTED` state and the destination file; removing a hardlink does not remove the other name.
+If Windows requests firewall permission, allow TubeVault only on Private networks. Guest Wi-Fi, VPNs or wireless client isolation may prevent connection. No router port forwarding is needed. This release does not modify firewall rules automatically or install certificates.
 
-## Future native iOS client
+## Verification limits
 
-The authenticated REST interface is shared: `POST /api/imports` creates `{filename, collection, size}`, `GET /api/imports/{id}` returns committed offset, `PUT /api/imports/{id}?offset=N` writes up to 8 MiB, and `POST /api/imports/{id}/finish` verifies ingestion. Cookie sessions and CSRF headers apply. A future native app can implement foreground/background transfer coordination and Keychain session storage without changing file ingestion semantics.
+Automated tests cover pairing expiry and replay, upload-only access, chunk resume, original-byte storage, duplicate finishing, immediate queueing, and the desktop/mobile browser flows. Actual iPhone Camera scanning, Safari file export, screen-lock suspension, large real videos and your Windows firewall/network still require a device acceptance test.
+
+The browser import control for files chosen on the PC remains under **Import videos selected on this PC**.

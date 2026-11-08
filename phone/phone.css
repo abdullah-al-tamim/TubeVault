@@ -1,0 +1,9 @@
+:root{color-scheme:dark;font-family:system-ui,sans-serif;background:#0b141b;color:#e9f0f4}
+body{margin:0;padding:24px 18px}main{max-width:560px;margin:20px auto}
+.brand{color:#71e6c4;font-weight:800;font-size:23px}.brand span{display:block;font-size:13px;font-weight:400;color:#a2b6c6}
+h1{font-size:34px;line-height:1.15}p{line-height:1.6;color:#adbdca}
+section{padding:20px;border:1px solid #2d424f;border-radius:16px}
+button,.pick{box-sizing:border-box;display:block;width:100%;border:0;border-radius:12px;padding:17px;background:#71e6c4;color:#0b141b;font:700 17px system-ui;text-align:center;margin:12px 0;cursor:pointer}
+button:disabled{opacity:.45}#cancel{background:#2d424f;color:white}.pick input{display:block;width:100%;margin-top:12px;font-size:14px}
+progress{width:100%;height:18px}article{padding:12px 0;border-bottom:1px solid #2d424f;overflow-wrap:anywhere}
+.notice{font-size:12px}strong{display:block}small{display:block;color:#adbdca}[hidden]{display:none!important}

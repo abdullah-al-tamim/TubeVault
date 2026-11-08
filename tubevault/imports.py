@@ -64,6 +64,7 @@ class Imports:
                 if not row or row.offset != row.size:
                     raise ValueError("Transfer incomplete")
                 if row.state == "INGESTED":
+                    self.release_staging(row.id, row.destination)
                     return row.destination
             path = self.temp / row.id
             folder = self.root / row.collection
@@ -84,5 +85,12 @@ class Imports:
             with self.db.session() as s:
                 current = s.get(Transfer, transfer_id)
                 current.sha256, current.destination, current.state = sha, str(target), "INGESTED"
-            # Temporary hardlink retained deliberately; cleanup is explicit, never source deletion.
+            # The published original now owns the bytes. Release only its staging link.
+            self.release_staging(row.id, str(target))
             return str(target)
+
+    def release_staging(self, transfer_id, destination):
+        staged = self.temp / transfer_id
+        if staged.exists() and destination and Path(destination).is_file():
+            if os.path.samefile(staged, destination):
+                staged.unlink()
