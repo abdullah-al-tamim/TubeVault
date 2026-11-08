@@ -151,7 +151,10 @@ class PhoneReceiver:
                 self.server.should_exit = True
                 self.server = None
             if self.listener:
-                self.listener.close()
+                # Uvicorn owns an active accept operation. Let its shutdown close
+                # the socket to avoid Windows IOCP cancellation errors.
+                if not self.thread or not self.thread.is_alive():
+                    self.listener.close()
                 self.listener = None
 
     def authorize(self, request):
@@ -248,15 +251,16 @@ class PhoneReceiver:
             self.authorize(request)
             with self.lock:
                 self.owned(transfer_id)
-                try:
-                    with self.imports.db.session() as session:
-                        already = session.get(Transfer, transfer_id).state == "INGESTED"
-                    target = self.imports.finish(transfer_id)
-                    self.scanner.scan_import(target, self.imports.root)
-                except ValueError as error:
-                    raise HTTPException(409, str(error)) from None
-                except OSError:
-                    raise HTTPException(409, "Could not save video. Check PC storage and try again.") from None
+            try:
+                with self.imports.db.session() as session:
+                    already = session.get(Transfer, transfer_id).state == "INGESTED"
+                target = self.imports.finish(transfer_id)
+                self.scanner.scan_import(target, self.imports.root)
+            except ValueError as error:
+                raise HTTPException(409, str(error)) from None
+            except OSError:
+                raise HTTPException(409, "Could not save video. Check PC storage and try again.") from None
+            with self.lock:
                 if not already:
                     self.completed += 1
             return {"saved": True, "queue_paused": self.imports.db.settings()["paused"]}

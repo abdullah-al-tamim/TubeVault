@@ -34,26 +34,26 @@ def video_signature(path):
 
 class Scanner:
     def __init__(self, db):
-        self.db, self.lock = db, threading.Lock()
+        self.db, self.lock = db, threading.RLock()
+        self.manual_lock = threading.Lock()
 
     def scan_import(self, path, root):
         """Queue an atomically completed phone import without scanning other roots."""
         path, root = Path(path).resolve(strict=True), Path(root).resolve(strict=True)
         if not path.is_relative_to(root) or not path.is_file():
             raise ValueError("Imported video is outside the inbox")
-        with self.lock:
-            with self.db.session() as s:
-                watch = s.scalar(select(Watch).where(Watch.path == str(root)))
-            if watch is None or not watch.enabled:
-                return
-            # Imports.finish has already verified and atomically published the whole file.
-            watch.stability = 0
-            self._file(watch, root, path, self.db.settings())
+        with self.db.session() as s:
+            watch = s.scalar(select(Watch).where(Watch.path == str(root)))
+        if watch is None or not watch.enabled:
+            return
+        # Imports.finish has already verified and atomically published the whole file.
+        watch.stability = 0
+        self._file(watch, root, path, self.db.settings())
 
     def add_files(self, paths):
         from .queue_controls import control_jobs
         results = []
-        with self.lock:
+        with self.manual_lock:
             for raw in dict.fromkeys(paths):
                 try:
                     path = Path(raw).resolve(strict=True)
@@ -90,17 +90,16 @@ class Scanner:
         return {"results": results}
 
     def scan(self, watch_id=None, automatic=False):
-        with self.lock:
-            with self.db.session() as s:
-                watches = list(s.scalars(select(Watch).where(Watch.enabled == True)))
-            for w in watches:
-                if watch_id and w.id != watch_id or automatic and not w.automatic:
-                    continue
-                try:
-                    self._watch(w)
-                except OSError:
-                    with self.db.session() as s:
-                        s.add(Event(kind="scan_error", message=f"Watch folder unavailable: {w.path}"))
+        with self.db.session() as s:
+            watches = list(s.scalars(select(Watch).where(Watch.enabled == True)))
+        for w in watches:
+            if watch_id and w.id != watch_id or automatic and not w.automatic:
+                continue
+            try:
+                self._watch(w)
+            except OSError:
+                with self.db.session() as s:
+                    s.add(Event(kind="scan_error", message=f"Watch folder unavailable: {w.path}"))
 
     def _watch(self, w):
         root = Path(w.path).resolve(strict=True)
@@ -132,7 +131,7 @@ class Scanner:
         folder_key = f"{st.st_dev}:{st.st_ino}"
         stat = p.stat()
         now = time.time()
-        with self.db.session() as s:
+        with self.lock, self.db.session() as s:
             mapping = s.scalar(select(Mapping).where(Mapping.watch_id == w.id, Mapping.folder_key == folder_key))
             if not mapping:
                 title = folder.name if folder != root else root.name + " — Unsorted"
@@ -168,15 +167,17 @@ class Scanner:
             s.flush()
             instance_id = instance.id
         if not video_signature(p):
-            with self.db.session() as s:
+            with self.lock, self.db.session() as s:
                 s.get(Instance, instance_id).reason = "Unrecognized video container"
             return
         sha, fast = digest(p), fingerprint(p, stat.st_size)
         after = p.stat()
         if (after.st_size, after.st_mtime_ns) != (stat.st_size, stat.st_mtime_ns):
             return
-        with self.db.session() as s:
+        with self.lock, self.db.session() as s:
             instance = s.get(Instance, instance_id)
+            if instance.identity_id:
+                return
             identity = s.scalar(select(Identity).where(Identity.sha256 == sha))
             if not identity:
                 identity = Identity(sha256=sha, fingerprint=fast, size=stat.st_size)

@@ -68,3 +68,63 @@ def test_inaccessible_watch_is_audited(db, tmp_path):
     from tubevault.db import Event
     with db.session() as s:
         assert s.scalar(select(Event)).kind == "scan_error"
+
+def test_phone_import_does_not_wait_for_unrelated_file_hash(db, video, tmp_path):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from unittest.mock import patch
+    from tubevault.imports import Imports
+    from tubevault.scanner import digest
+
+    imports = Imports(db, tmp_path / "inbox")
+    transfer = imports.create("phone.mov", "Phone", video.stat().st_size)
+    imports.append(transfer, 0, video.read_bytes())
+    target = imports.finish(transfer)
+    with db.session() as session:
+        watch = Watch(path=str(video.parents[1]), stability=0)
+        session.add(watch)
+        session.flush()
+        watch_id = watch.id
+    scanner = Scanner(db)
+    hashing = threading.Event()
+    release = threading.Event()
+
+    def blocked_hash(path):
+        if str(path) == str(video):
+            hashing.set()
+            assert release.wait(10)
+        return digest(path)
+
+    with patch("tubevault.scanner.digest", side_effect=blocked_hash), ThreadPoolExecutor(max_workers=2) as pool:
+        background = pool.submit(scanner.scan, watch_id)
+        assert hashing.wait(3)
+        try:
+            pool.submit(scanner.scan_import, target, imports.root).result(timeout=3)
+            assert not release.is_set()
+            with db.session() as session:
+                assert len(list(session.scalars(select(Job)))) == 1
+        finally:
+            release.set()
+        background.result(timeout=3)
+
+
+def test_concurrent_same_file_hash_creates_one_job(db, video):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from unittest.mock import patch
+    from tubevault.scanner import digest
+    with db.session() as session:
+        session.add(Watch(path=str(video.parents[1]), stability=0))
+    scanner = Scanner(db)
+    barrier = threading.Barrier(2)
+
+    def simultaneous_hash(path):
+        barrier.wait(timeout=5)
+        return digest(path)
+
+    with patch("tubevault.scanner.digest", side_effect=simultaneous_hash), ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(scanner.scan) for _ in range(2)]
+        for future in futures:
+            future.result(timeout=7)
+    with db.session() as session:
+        assert len(list(session.scalars(select(Job)))) == 1

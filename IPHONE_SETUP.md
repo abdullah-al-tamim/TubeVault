@@ -32,3 +32,5 @@ If Windows requests firewall permission, allow TubeVault only on Private network
 Automated tests cover pairing expiry and replay, upload-only access, chunk resume, original-byte storage, duplicate finishing, immediate queueing, and the desktop/mobile browser flows. Actual iPhone Camera scanning, Safari file export, screen-lock suspension, large real videos and your Windows firewall/network still require a device acceptance test.
 
 The browser import control for files chosen on the PC remains under **Import videos selected on this PC**.
+
+The phone page shows copying speed and transferred bytes separately from PC verification and queue preparation. An individual copy request times out after two minutes without a completed response. Tap Send to PC again to resume from the last committed chunk. Folder scans serialize short metadata updates, while unrelated file hashes can run independently of phone imports.

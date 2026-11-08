@@ -1,4 +1,4 @@
-#define AppVersion "0.3.0"
+#define AppVersion "0.3.1"
 [Setup]
 AppId={{A837C735-10C2-4F80-90C7-0FCD18EFA954}
 AppName=TubeVault

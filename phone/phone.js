@@ -13,6 +13,7 @@ let running = false;
 let currentRequest;
 const selected = () => Array.from(videos.files || []);
 function text(element, message) { element.textContent = message; }
+function megabytes(bytes) { return (bytes / 1024 / 1024).toFixed(1) + " MB"; }
 async function request(path, method = "GET", body) {
   const response = await fetch(path, {
     method, headers: {Authorization: "Bearer " + token, "Content-Type": "application/json"},
@@ -50,7 +51,9 @@ function copyChunk(id, offset, block, onProgress) {
     currentRequest = xhr;
     xhr.open("PUT", "/files/" + encodeURIComponent(id) + "?offset=" + offset);
     xhr.setRequestHeader("Authorization", "Bearer " + token);
+    xhr.timeout = 120000;
     xhr.upload.onprogress = event => onProgress(event.loaded);
+    xhr.ontimeout = () => reject(new Error("The PC did not respond for two minutes. Tap Send to PC to resume from its saved position."));
     xhr.onload = () => {
       if (xhr.status === 200) resolve(JSON.parse(xhr.responseText));
       else {
@@ -78,6 +81,8 @@ send.addEventListener("click", async () => {
     bar.max = file.size; bar.value = 0;
     title.textContent = file.name;
     row.append(title, detail, bar); progress.append(row);
+    const started = performance.now();
+    let initialOffset = 0;
     const key = "tubevault-copy:" + JSON.stringify([file.name, file.size, file.lastModified]);
     try {
       let id = sessionStorage.getItem(key);
@@ -87,21 +92,34 @@ send.addEventListener("click", async () => {
       }
       let state = await request("/files/" + encodeURIComponent(id));
       let offset = state.offset;
+      initialOffset = offset;
+      bar.value = offset;
+      text(detail, "Preparing to copy " + megabytes(file.size) + "…");
       if (state.state !== "INGESTED") {
         while (offset < file.size) {
           if (paused) throw new Error("Transfer paused. Tap Send to PC to continue.");
           const block = file.slice(offset, offset + 4 * 1024 * 1024);
           const result = await copyChunk(id, offset, block, loaded => {
             bar.value = offset + loaded;
-            text(detail, Math.min(100, Math.floor((offset + loaded) / file.size * 100)) + "% copied to PC");
+            const copied = offset + loaded;
+            const seconds = Math.max(.1, (performance.now() - started) / 1000);
+            const speed = megabytes((copied - initialOffset) / seconds) + "/s";
+            text(detail, Math.min(100, Math.floor(copied / file.size * 100)) + "% · "
+              + megabytes(copied) + " / " + megabytes(file.size) + " · " + speed
+              + (loaded === block.size ? " · Waiting for PC to save this chunk…" : ""));
           });
           offset = result.offset;
         }
         if (paused) throw new Error("Transfer paused. Tap Send to PC to finish saving.");
+        text(detail, "Copied to PC · verifying and preparing the YouTube queue…");
         state = await request("/files/" + encodeURIComponent(id) + "/finish", "POST");
       }
       bar.value = file.size;
+      const seconds = Math.max(1, Math.round((performance.now() - started) / 1000));
       text(detail, "Saved on PC · queued for YouTube");
+      const timing = document.createElement("small");
+      text(timing, "Transfer completed in " + seconds + " seconds");
+      row.append(timing);
     } catch (error) {
       text(detail, error.message);
       if (/expired|ended|not found/i.test(error.message)) sessionStorage.removeItem(key);
