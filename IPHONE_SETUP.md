@@ -34,3 +34,5 @@ Automated tests cover pairing expiry and replay, upload-only access, chunk resum
 The browser import control for files chosen on the PC remains under **Import videos selected on this PC**.
 
 The phone page shows copying speed and transferred bytes separately from PC verification and queue preparation. An individual copy request times out after two minutes without a completed response. Tap Send to PC again to resume from the last committed chunk. Folder scans serialize short metadata updates, while unrelated file hashes can run independently of phone imports.
+
+Use **Test connection** on the paired phone page to send a disposable 1 MB sample. This does not save a file or create a YouTube upload. It reports the actual phone-to-PC sample speed, independent of Photos exporting or downloading a video. A fast sample does not guarantee sustained video speed; keep Safari visible during both tests and copies. If the sample is slow, check the local Wi-Fi path and VPNs. If the sample is quick but videos are slow, check whether Photos is preparing a copy or downloading the original from iCloud. Physical iPhone/network throughput still needs testing on the user's devices.

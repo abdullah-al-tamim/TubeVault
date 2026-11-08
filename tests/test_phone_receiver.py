@@ -53,6 +53,20 @@ def test_expired_invitation_cannot_pair(receiver):
                            headers={"Origin": receiver.url}).status_code == 401
 
 
+def test_connection_test_is_authenticated_bounded_and_creates_no_files(receiver):
+    with TestClient(receiver.create_app("192.168.1.20"), base_url=receiver.url) as client:
+        assert client.post("/connection-test", content=b"x").status_code == 401
+        headers = pair(client, receiver)
+        assert client.post("/connection-test", content=b"x", headers=headers).status_code == 400
+        assert client.post("/connection-test", content=b"x" * (1024 * 1024 + 1), headers=headers).status_code == 413
+        result = client.post("/connection-test", content=b"x" * (1024 * 1024), headers=headers)
+        assert result.status_code == 200
+        assert result.json()["bytes"] == 1024 * 1024
+        assert result.json()["receive_seconds"] >= 0
+        assert not receiver.transfers
+        assert not list(receiver.imports.temp.iterdir())
+
+
 def test_phone_chunk_resume_finish_queues_exact_original(receiver, db, video):
     original = video.read_bytes()
     with TestClient(receiver.create_app("192.168.1.20"), base_url=receiver.url) as client:

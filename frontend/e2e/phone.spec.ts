@@ -12,6 +12,11 @@ test("phone page pairs and copies a selected video in chunks", async ({page})=>{
     await route.fulfill({json:{token:"phone-token"}});
   });
   await page.route("**/status",route=>route.fulfill({json:{collection:"iPhone memories",queue_paused:false}}));
+  await page.route("**/connection-test",async route=>{
+    expect(route.request().headers().authorization).toBe("Bearer phone-token");
+    expect(route.request().postDataBuffer()?.length).toBe(1024*1024);
+    await route.fulfill({json:{bytes:1024*1024,receive_seconds:.01}});
+  });
   let offset=0;
   await page.route("**/files",async route=>{
     expect(route.request().headers().authorization).toBe("Bearer phone-token");
@@ -27,6 +32,8 @@ test("phone page pairs and copies a selected video in chunks", async ({page})=>{
   await page.goto("/#pair=test-invitation");
   await expect(page.getByText("Collection · iPhone memories")).toBeVisible();
   await expect(page).toHaveURL("http://127.0.0.1:4173/");
+  await page.getByRole("button",{name:"Test connection",exact:true}).click();
+  await expect(page.locator("#connection-result")).toContainText("Sample transfer is quick");
   await page.locator("#videos").setInputFiles({name:"phone.mov",mimeType:"video/quicktime",buffer:Buffer.from("originaldata")});
   await page.getByRole("button",{name:"Send to PC",exact:true}).click();
   await expect(page.getByText("Saved on PC · queued for YouTube")).toBeVisible();

@@ -202,6 +202,21 @@ class PhoneReceiver:
             self.authorize(request)
             return self.status() | {"queue_paused": self.imports.db.settings()["paused"]}
 
+        @app.post("/connection-test")
+        async def connection_test(request: Request):
+            self.authorize(request)
+            received = 0
+            started = time.monotonic()
+            async for part in request.stream():
+                received += len(part)
+                if received > 1024 * 1024:
+                    raise HTTPException(413, "Connection test too large")
+            self.authorize(request)
+            if received != 1024 * 1024:
+                raise HTTPException(400, "Incomplete connection test")
+            # Discard the sample: no file, queue entry or request contents logged.
+            return {"bytes": received, "receive_seconds": time.monotonic() - started}
+
         @app.post("/files")
         def create_file(body: PhoneFile, request: Request):
             self.authorize(request)

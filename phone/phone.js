@@ -5,6 +5,8 @@ const videos = document.querySelector("#videos");
 const send = document.querySelector("#send");
 const cancel = document.querySelector("#cancel");
 const progress = document.querySelector("#progress");
+const testConnection = document.querySelector("#test-connection");
+const connectionResult = document.querySelector("#connection-result");
 const invitation = new URLSearchParams(location.hash.slice(1)).get("pair");
 history.replaceState(null, "", "/");
 let token = sessionStorage.getItem("tubevault-phone-session") || "";
@@ -67,10 +69,44 @@ function copyChunk(id, offset, block, onProgress) {
     xhr.send(block);
   });
 }
+testConnection.addEventListener("click", async () => {
+  testConnection.disabled = true;
+  videos.disabled = true; send.disabled = true;
+  text(connectionResult, "Testing phone → PC with a 1 MB sample…");
+  const xhr = new XMLHttpRequest();
+  const sample = new Uint8Array(1024 * 1024);
+  // Random bytes avoid compression making the link appear faster than it is.
+  for (let offset = 0; offset < sample.length; offset += 65536) {
+    crypto.getRandomValues(sample.subarray(offset, offset + 65536));
+  }
+  const started = performance.now();
+  xhr.open("POST", "/connection-test");
+  xhr.setRequestHeader("Authorization", "Bearer " + token);
+  xhr.timeout = 60000;
+  xhr.onload = () => {
+    if (xhr.status !== 200) {
+      text(connectionResult, "Test could not finish. Check the PC receiving session and try again.");
+    } else {
+      const seconds = Math.max(.01, (performance.now() - started) / 1000);
+      text(connectionResult, "Phone → PC: " + (1 / seconds).toFixed(2) + " MB/s (1 MB in "
+        + seconds.toFixed(1) + " seconds). " + (seconds > 5
+          ? "The local connection is slow. Keep Safari open; check both devices use the same main Wi-Fi and temporarily disconnect any VPN."
+          : "Sample transfer is quick. If videos are slow, check whether Photos is downloading originals from iCloud or preparing the selected videos."));
+    }
+  };
+  xhr.onerror = xhr.ontimeout = () => text(connectionResult,
+    "Connection test stalled. Keep Safari open and check both devices are on the same main Wi-Fi.");
+  xhr.onloadend = () => {
+    testConnection.disabled = running; videos.disabled = running;
+    send.disabled = running || !selected().length;
+  };
+  xhr.send(sample);
+});
 cancel.addEventListener("click", () => { paused = true; if (currentRequest) currentRequest.abort(); });
 send.addEventListener("click", async () => {
   if (running) return;
   running = true; paused = false; send.disabled = true; videos.disabled = true; cancel.hidden = false;
+  testConnection.disabled = true;
   progress.replaceChildren();
   for (const file of selected()) {
     if (paused) break;
@@ -128,5 +164,6 @@ send.addEventListener("click", async () => {
     }
   }
   currentRequest = undefined; running = false; cancel.hidden = true; videos.disabled = false; send.disabled = false;
+  testConnection.disabled = false;
 });
 pair();
