@@ -39,3 +39,49 @@ test("phone page pairs and copies a selected video in chunks", async ({page})=>{
   await expect(page.getByText("Saved on PC · queued for YouTube")).toBeVisible();
   expect(offset).toBe(12);
 });
+
+for (const failure of ["before-save", "after-save", "response-stalled"]) {
+  test(`phone recovers a chunk ${failure} without restarting the file`, async ({page}) => {
+    for (const [url, file, type] of [["/", "index.html", "text/html"], ["/phone.js", "phone.js", "text/javascript"], ["/phone.css", "phone.css", "text/css"]]) {
+      await page.route("http://127.0.0.1:4173" + url, async route => route.fulfill({
+        body: await readFile(resolve("..", "phone", file)), contentType: type
+      }));
+    }
+    await page.route("**/pair", route => route.fulfill({json: {token: "phone-token"}}));
+    await page.route("**/status", route => route.fulfill({json: {collection: "Phone", queue_paused: true}}));
+    await page.route("**/files", route => route.fulfill({json: {id: "transfer"}}));
+    const original = Buffer.alloc(600000);
+    for (let i = 0; i < original.length; i++) original[i] = i % 251;
+    let offset = 0;
+    let puts = 0;
+    const committed: Buffer[] = [];
+    await page.route("**/files/transfer", route => route.fulfill({json: {offset, state: "RECEIVING"}}));
+    await page.route("**/files/transfer?offset=*", async route => {
+      const start = Number(new URL(route.request().url()).searchParams.get("offset"));
+      const body = route.request().postDataBuffer()!;
+      expect(start).toBe(offset);
+      expect(body.length).toBeLessThanOrEqual(512 * 1024);
+      expect(body).toEqual(original.subarray(start, start + body.length));
+      puts++;
+      if (puts === 1) {
+        if (failure !== "before-save") { offset += body.length; committed.push(body); }
+        if (failure === "response-stalled") {
+          // Polling must discover the commit and advance without waiting for this reply.
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          await route.fulfill({json: {offset}}).catch(() => {}); return;
+        }
+        await route.abort("failed"); return;
+      }
+      offset += body.length; committed.push(body);
+      await route.fulfill({json: {offset}});
+    });
+    await page.route("**/files/transfer/finish", route => route.fulfill({json: {saved: true}}));
+    await page.goto("/#pair=test-invitation");
+    await expect(page.locator("#sender")).toBeVisible();
+    await page.locator("#videos").setInputFiles({name: "phone.mov", mimeType: "video/quicktime", buffer: original});
+    await page.getByRole("button", {name: "Send to PC", exact: true}).click();
+    await expect(page.getByText("Saved on PC · queued for YouTube")).toBeVisible();
+    expect(Buffer.concat(committed)).toEqual(original);
+    expect(puts).toBe(failure === "before-save" ? 3 : 2);
+  });
+}

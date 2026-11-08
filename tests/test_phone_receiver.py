@@ -105,6 +105,36 @@ def test_new_receiver_cannot_access_another_sessions_transfers(receiver):
         assert client.get("/files/" + first, headers=headers).status_code == 404
 
 
+def test_phone_reports_received_bytes_while_disk_save_is_pending(receiver):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    entered, release = threading.Event(), threading.Event()
+    append = receiver.imports.append
+    def slow_save(*args):
+        entered.set()
+        assert release.wait(5)
+        return append(*args)
+
+    with TestClient(receiver.create_app("192.168.1.20"), base_url=receiver.url) as client:
+        headers = pair(client, receiver)
+        transfer_id = client.post("/files", json={"filename": "phone.mov", "size": 100}, headers=headers).json()["id"]
+        path = "/files/" + transfer_id
+        with patch.object(receiver.imports, "append", slow_save), ThreadPoolExecutor(1) as pool:
+            pending = pool.submit(client.put, path + "?offset=0", content=b"x" * 100, headers=headers)
+            try:
+                assert entered.wait(3)
+                state = client.get(path, headers=headers).json()
+                assert state["offset"] == 0
+                assert state["receiving"] == {"chunk_offset": 0, "received": 100, "stage": "saving"}
+            finally:
+                release.set()
+            assert pending.result(timeout=3).json()["offset"] == 100
+        state = client.get(path, headers=headers).json()
+        assert state["offset"] == 100
+        assert state["receiving"]["stage"] == "saved"
+
+
 
 def test_real_receiver_start_pair_stop_uses_separate_port(db, tmp_path):
     import httpx

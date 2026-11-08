@@ -17,14 +17,22 @@ const selected = () => Array.from(videos.files || []);
 function text(element, message) { element.textContent = message; }
 function megabytes(bytes) { return (bytes / 1024 / 1024).toFixed(1) + " MB"; }
 async function request(path, method = "GET", body) {
-  const response = await fetch(path, {
-    method, headers: {Authorization: "Bearer " + token, "Content-Type": "application/json"},
-    body: body === undefined ? undefined : JSON.stringify(body)
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), path.endsWith("/finish") ? 120000 : 10000);
+  let response;
+  try {
+    response = await fetch(path, {
+      method, signal: controller.signal,
+      headers: {Authorization: "Bearer " + token, "Content-Type": "application/json"},
+      body: body === undefined ? undefined : JSON.stringify(body)
+    });
+  } finally { clearTimeout(timer); }
   if (!response.ok) {
     let message = "Connection interrupted. Select the same videos to resume.";
     try { message = (await response.json()).detail || message; } catch {}
-    throw new Error(message);
+    const error = new Error(message);
+    error.status = response.status;
+    throw error;
   }
   return response.json();
 }
@@ -50,22 +58,48 @@ videos.addEventListener("change", () => {
 function copyChunk(id, offset, block, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    let settled = false;
+    let pollTimer;
+    const finish = (error, result) => {
+      if (settled) return;
+      settled = true; clearTimeout(pollTimer);
+      if (currentRequest === xhr) currentRequest = undefined;
+      if (error) reject(error); else resolve(result);
+    };
+    const poll = async () => {
+      try {
+        const state = await request("/files/" + encodeURIComponent(id));
+        if (settled) return;
+        if (state.offset >= offset + block.byteLength) {
+          // The disk/DB commit is authoritative even if its PUT response was lost.
+          finish(null, {offset: state.offset}); xhr.abort(); return;
+        }
+        onProgress(0, state.receiving);
+      } catch { /* The upload's timeout and resume check handle a lost connection. */ }
+      if (!settled) pollTimer = setTimeout(poll, 2000);
+    };
     currentRequest = xhr;
     xhr.open("PUT", "/files/" + encodeURIComponent(id) + "?offset=" + offset);
     xhr.setRequestHeader("Authorization", "Bearer " + token);
-    xhr.timeout = 120000;
-    xhr.upload.onprogress = event => onProgress(event.loaded);
-    xhr.ontimeout = () => reject(new Error("The PC did not respond for two minutes. Tap Send to PC to resume from its saved position."));
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.timeout = 30000;
+    xhr.upload.onprogress = event => { if (!settled) onProgress(event.loaded); };
+    xhr.ontimeout = () => finish(new Error("The connection stalled for 30 seconds."));
     xhr.onload = () => {
-      if (xhr.status === 200) resolve(JSON.parse(xhr.responseText));
+      if (xhr.status === 200) {
+        try { finish(null, JSON.parse(xhr.responseText)); }
+        catch { finish(new Error("The PC response was interrupted.")); }
+      }
       else {
         let message = "Copy interrupted. Tap Send to PC to resume.";
         try { message = JSON.parse(xhr.responseText).detail || message; } catch {}
-        reject(new Error(message));
+        const error = new Error(message); error.status = xhr.status;
+        finish(error);
       }
     };
-    xhr.onerror = () => reject(new Error("Connection lost. Keep both devices on the same Wi-Fi and tap Send to PC again."));
-    xhr.onabort = () => reject(new Error("Transfer paused. Tap Send to PC to continue."));
+    xhr.onerror = () => finish(new Error("Connection lost."));
+    xhr.onabort = () => finish(new Error("Transfer paused. Tap Send to PC to continue."));
+    pollTimer = setTimeout(poll, 2000);
     xhr.send(block);
   });
 }
@@ -132,19 +166,48 @@ send.addEventListener("click", async () => {
       bar.value = offset;
       text(detail, "Preparing to copy " + megabytes(file.size) + "…");
       if (state.state !== "INGESTED") {
+        let failures = 0;
         while (offset < file.size) {
           if (paused) throw new Error("Transfer paused. Tap Send to PC to continue.");
-          const block = file.slice(offset, offset + 4 * 1024 * 1024);
-          const result = await copyChunk(id, offset, block, loaded => {
-            bar.value = offset + loaded;
-            const copied = offset + loaded;
-            const seconds = Math.max(.1, (performance.now() - started) / 1000);
-            const speed = megabytes((copied - initialOffset) / seconds) + "/s";
-            text(detail, Math.min(100, Math.floor(copied / file.size * 100)) + "% · "
-              + megabytes(copied) + " / " + megabytes(file.size) + " · " + speed
-              + (loaded === block.size ? " · Waiting for PC to save this chunk…" : ""));
-          });
-          offset = result.offset;
+          // Materialize a small slice first so Photos/file reading is separate
+          // from sending. Never hold the full video in phone memory.
+          text(detail, "Reading next part from the phone…");
+          const block = await file.slice(offset, offset + 512 * 1024).arrayBuffer();
+          if (paused) throw new Error("Transfer paused. Tap Send to PC to continue.");
+          try {
+            const result = await copyChunk(id, offset, block, (loaded, remote) => {
+              const received = remote && remote.chunk_offset === offset ? remote.received : loaded;
+              bar.value = offset + received;
+              const copied = offset + received;
+              const seconds = Math.max(.1, (performance.now() - started) / 1000);
+              const speed = megabytes((copied - initialOffset) / seconds) + "/s";
+              let stage = "Sending next part to PC…";
+              if (remote && remote.chunk_offset === offset) {
+                stage = remote.stage === "saving" ? "PC is saving received bytes…"
+                  : "PC has received " + megabytes(remote.received) + " of this part…";
+              } else if (loaded === block.byteLength) {
+                stage = "Sent by browser · checking PC receipt…";
+              }
+              text(detail, Math.min(100, Math.floor(copied / file.size * 100)) + "% · "
+                + megabytes(copied) + " / " + megabytes(file.size) + " · " + speed
+                + " · " + stage);
+            });
+            if (!Number.isInteger(result.offset) || result.offset <= offset || result.offset > file.size) {
+              throw new Error("PC returned an invalid saved position.");
+            }
+            offset = result.offset;
+            bar.value = offset; failures = 0;
+          } catch (error) {
+            if (paused || [400,401,403,404,413].includes(error.status)) throw error;
+            failures += 1;
+            if (failures > 3) throw new Error(error.message + " Copy paused after three retries. Tap Send to PC to resume.");
+            text(detail, error.message + " Checking saved position and retrying (" + failures + "/3)…");
+            await new Promise(resolve => setTimeout(resolve, failures * 1000));
+            if (paused) throw new Error("Transfer paused. Tap Send to PC to continue.");
+            const saved = await request("/files/" + encodeURIComponent(id));
+            if (!Number.isInteger(saved.offset) || saved.offset < offset || saved.offset > file.size) throw error;
+            offset = saved.offset; bar.value = offset;
+          }
         }
         if (paused) throw new Error("Transfer paused. Tap Send to PC to finish saving.");
         text(detail, "Copied to PC · verifying and preparing the YouTube queue…");

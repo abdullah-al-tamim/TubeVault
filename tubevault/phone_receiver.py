@@ -70,6 +70,7 @@ class PhoneReceiver:
         self.pair_deadline = 0
         self.deadline = 0
         self.transfers = set()
+        self.progress = {}
         self.reserved_bytes = 0
         self.completed = 0
         self.paired = False
@@ -109,6 +110,7 @@ class PhoneReceiver:
             self.pair_deadline = time.time() + 600
             self.deadline = time.time() + SESSION_SECONDS
             self.transfers = set()
+            self.progress = {}
             self.reserved_bytes = self.completed = 0
             self.paired = False
             import uvicorn
@@ -238,23 +240,30 @@ class PhoneReceiver:
             self.authorize(request)
             with self.lock:
                 self.owned(transfer_id)
+                progress = dict(self.progress.get(transfer_id, {}))
             with self.imports.db.session() as session:
                 row = session.get(Transfer, transfer_id)
-                return {"offset": row.offset, "state": row.state, "size": row.size}
+                return {"offset": row.offset, "state": row.state, "size": row.size,
+                        "receiving": progress}
 
         @app.put("/files/{transfer_id}")
         async def chunk(transfer_id: str, offset: int, request: Request):
             self.authorize(request)
             with self.lock:
                 self.owned(transfer_id)
+                progress = {"chunk_offset": offset, "received": 0, "stage": "receiving"}
+                self.progress[transfer_id] = progress
             data = bytearray()
             async for part in request.stream():
                 data.extend(part)
+                progress["received"] = len(data)
                 if len(data) > 4 * 1024 * 1024:
                     raise HTTPException(413, "Transfer chunk too large")
             self.authorize(request)
             try:
+                progress["stage"] = "saving"
                 committed = await asyncio.to_thread(self.imports.append, transfer_id, offset, bytes(data))
+                progress["stage"] = "saved"
                 return {"offset": committed}
             except ValueError as error:
                 raise HTTPException(409, str(error)) from None
