@@ -147,6 +147,9 @@ def test_real_receiver_start_pair_stop_uses_separate_port(db, tmp_path):
         with httpx.Client(base_url=receiver.url, trust_env=False) as client:
             assert client.get("/").status_code == 200
             assert client.get("/phone.js").status_code == 200
+            policy = client.get("/transfer-policy.js")
+            assert policy.status_code == 200
+            assert "export class TransferPolicy" in policy.text
             paired = client.post("/pair",json={"invitation":invitation},headers={"Origin":receiver.url})
             assert paired.status_code == 200
             assert client.get("/status",headers={"Authorization":"Bearer "+paired.json()["token"]}).status_code == 200

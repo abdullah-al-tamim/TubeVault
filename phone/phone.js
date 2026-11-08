@@ -1,4 +1,5 @@
 "use strict";
+import {TransferPolicy} from "./transfer-policy.js";
 const connection = document.querySelector("#connection");
 const sender = document.querySelector("#sender");
 const videos = document.querySelector("#videos");
@@ -55,7 +56,7 @@ videos.addEventListener("change", () => {
   send.disabled = running || !files.length;
   text(document.querySelector("#selection"), files.length + " video(s) selected");
 });
-function copyChunk(id, offset, block, onProgress) {
+function copyChunk(id, offset, block, timeout, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     let settled = false;
@@ -82,9 +83,9 @@ function copyChunk(id, offset, block, onProgress) {
     xhr.open("PUT", "/files/" + encodeURIComponent(id) + "?offset=" + offset);
     xhr.setRequestHeader("Authorization", "Bearer " + token);
     xhr.setRequestHeader("Content-Type", "application/octet-stream");
-    xhr.timeout = 30000;
+    xhr.timeout = timeout;
     xhr.upload.onprogress = event => { if (!settled) onProgress(event.loaded); };
-    xhr.ontimeout = () => finish(new Error("The connection stalled for 30 seconds."));
+    xhr.ontimeout = () => finish(new Error("This part took too long. Trying a smaller part."));
     xhr.onload = () => {
       if (xhr.status === 200) {
         try { finish(null, JSON.parse(xhr.responseText)); }
@@ -142,6 +143,7 @@ send.addEventListener("click", async () => {
   running = true; paused = false; send.disabled = true; videos.disabled = true; cancel.hidden = false;
   testConnection.disabled = true;
   progress.replaceChildren();
+  const policy = new TransferPolicy();
   for (const file of selected()) {
     if (paused) break;
     const row = document.createElement("article");
@@ -171,11 +173,12 @@ send.addEventListener("click", async () => {
           if (paused) throw new Error("Transfer paused. Tap Send to PC to continue.");
           // Materialize a small slice first so Photos/file reading is separate
           // from sending. Never hold the full video in phone memory.
-          text(detail, "Reading next part from the phone…");
-          const block = await file.slice(offset, offset + 512 * 1024).arrayBuffer();
+          text(detail, "Reading next part from the phone · adapting transfer speed…");
+          const chunkStarted = performance.now();
+          const block = await file.slice(offset, offset + policy.chunkBytes).arrayBuffer();
           if (paused) throw new Error("Transfer paused. Tap Send to PC to continue.");
           try {
-            const result = await copyChunk(id, offset, block, (loaded, remote) => {
+            const result = await copyChunk(id, offset, block, policy.timeoutFor(block.byteLength), (loaded, remote) => {
               const received = remote && remote.chunk_offset === offset ? remote.received : loaded;
               bar.value = offset + received;
               const copied = offset + received;
@@ -196,9 +199,11 @@ send.addEventListener("click", async () => {
               throw new Error("PC returned an invalid saved position.");
             }
             offset = result.offset;
+            policy.completed(block.byteLength, performance.now() - chunkStarted);
             bar.value = offset; failures = 0;
           } catch (error) {
             if (paused || [400,401,403,404,413].includes(error.status)) throw error;
+            policy.backoff();
             failures += 1;
             if (failures > 3) throw new Error(error.message + " Copy paused after three retries. Tap Send to PC to resume.");
             text(detail, error.message + " Checking saved position and retrying (" + failures + "/3)…");

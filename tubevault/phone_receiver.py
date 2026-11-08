@@ -292,6 +292,7 @@ class PhoneReceiver:
         @app.get("/{asset:path}")
         def page(asset: str):
             files = {"": ("index.html", "text/html"), "phone.js": ("phone.js", "text/javascript"),
+                     "transfer-policy.js": ("transfer-policy.js", "text/javascript"),
                      "phone.css": ("phone.css", "text/css")}
             if asset not in files:
                 raise HTTPException(404)

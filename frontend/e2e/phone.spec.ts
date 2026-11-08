@@ -1,9 +1,12 @@
 import {test, expect} from "@playwright/test";
 import {readFile} from "node:fs/promises";
 import {resolve} from "node:path";
+import {createHash} from "node:crypto";
+
+const hash = (value: Buffer) => createHash("sha256").update(value).digest("hex");
 
 test("phone page pairs and copies a selected video in chunks", async ({page})=>{
-  for(const [url,file,type] of [["/","index.html","text/html"],["/phone.js","phone.js","text/javascript"],["/phone.css","phone.css","text/css"]]){
+  for(const [url,file,type] of [["/","index.html","text/html"],["/phone.js","phone.js","text/javascript"],["/transfer-policy.js","transfer-policy.js","text/javascript"],["/phone.css","phone.css","text/css"]]){
     const body=await readFile(resolve("..","phone",file));
     await page.route("http://127.0.0.1:4173"+url,route=>route.fulfill({body,contentType:type}));
   }
@@ -42,7 +45,7 @@ test("phone page pairs and copies a selected video in chunks", async ({page})=>{
 
 for (const failure of ["before-save", "after-save", "response-stalled"]) {
   test(`phone recovers a chunk ${failure} without restarting the file`, async ({page}) => {
-    for (const [url, file, type] of [["/", "index.html", "text/html"], ["/phone.js", "phone.js", "text/javascript"], ["/phone.css", "phone.css", "text/css"]]) {
+    for (const [url, file, type] of [["/", "index.html", "text/html"], ["/phone.js", "phone.js", "text/javascript"], ["/transfer-policy.js", "transfer-policy.js", "text/javascript"], ["/phone.css", "phone.css", "text/css"]]) {
       await page.route("http://127.0.0.1:4173" + url, async route => route.fulfill({
         body: await readFile(resolve("..", "phone", file)), contentType: type
       }));
@@ -50,18 +53,20 @@ for (const failure of ["before-save", "after-save", "response-stalled"]) {
     await page.route("**/pair", route => route.fulfill({json: {token: "phone-token"}}));
     await page.route("**/status", route => route.fulfill({json: {collection: "Phone", queue_paused: true}}));
     await page.route("**/files", route => route.fulfill({json: {id: "transfer"}}));
-    const original = Buffer.alloc(600000);
+    const original = Buffer.alloc(2600000);
     for (let i = 0; i < original.length; i++) original[i] = i % 251;
     let offset = 0;
     let puts = 0;
+    const sizes: number[] = [];
     const committed: Buffer[] = [];
     await page.route("**/files/transfer", route => route.fulfill({json: {offset, state: "RECEIVING"}}));
     await page.route("**/files/transfer?offset=*", async route => {
       const start = Number(new URL(route.request().url()).searchParams.get("offset"));
       const body = route.request().postDataBuffer()!;
       expect(start).toBe(offset);
-      expect(body.length).toBeLessThanOrEqual(512 * 1024);
-      expect(body).toEqual(original.subarray(start, start + body.length));
+      expect(body.length).toBeLessThanOrEqual(4 * 1024 * 1024);
+      sizes.push(body.length);
+      expect(hash(body)).toBe(hash(original.subarray(start, start + body.length)));
       puts++;
       if (puts === 1) {
         if (failure !== "before-save") { offset += body.length; committed.push(body); }
@@ -81,7 +86,35 @@ for (const failure of ["before-save", "after-save", "response-stalled"]) {
     await page.locator("#videos").setInputFiles({name: "phone.mov", mimeType: "video/quicktime", buffer: original});
     await page.getByRole("button", {name: "Send to PC", exact: true}).click();
     await expect(page.getByText("Saved on PC · queued for YouTube")).toBeVisible();
-    expect(Buffer.concat(committed)).toEqual(original);
-    expect(puts).toBe(failure === "before-save" ? 3 : 2);
+    expect(hash(Buffer.concat(committed))).toBe(hash(original));
+    if (failure !== "response-stalled") expect(sizes[1]).toBeLessThanOrEqual(sizes[0] / 2);
   });
 }
+
+test("phone grows transfer pieces on a fast connection and preserves exact bytes", async ({page}) => {
+  for (const [url, file, type] of [["/", "index.html", "text/html"], ["/phone.js", "phone.js", "text/javascript"], ["/transfer-policy.js", "transfer-policy.js", "text/javascript"], ["/phone.css", "phone.css", "text/css"]]) {
+    await page.route("http://127.0.0.1:4173" + url, async route => route.fulfill({body: await readFile(resolve("..", "phone", file)), contentType: type}));
+  }
+  await page.route("**/pair", route => route.fulfill({json: {token: "phone-token"}}));
+  await page.route("**/status", route => route.fulfill({json: {collection: "Phone", queue_paused: true}}));
+  await page.route("**/files", route => route.fulfill({json: {id: "transfer"}}));
+  const original = Buffer.alloc(12 * 1024 * 1024, 37);
+  let offset = 0;
+  const sizes: number[] = [];
+  await page.route("**/files/transfer", route => route.fulfill({json: {offset, state: "RECEIVING"}}));
+  await page.route("**/files/transfer?offset=*", async route => {
+    expect(Number(new URL(route.request().url()).searchParams.get("offset"))).toBe(offset);
+    const body = route.request().postDataBuffer()!;
+    expect(hash(body)).toBe(hash(original.subarray(offset, offset + body.length)));
+    sizes.push(body.length); offset += body.length;
+    await route.fulfill({json: {offset}});
+  });
+  await page.route("**/files/transfer/finish", route => route.fulfill({json: {saved: true}}));
+  await page.goto("/#pair=test-invitation");
+  await expect(page.locator("#sender")).toBeVisible();
+  await page.locator("#videos").setInputFiles({name: "phone.mov", mimeType: "video/quicktime", buffer: original});
+  await page.getByRole("button", {name: "Send to PC", exact: true}).click();
+  await expect(page.getByText("Saved on PC · queued for YouTube")).toBeVisible({timeout: 15000});
+  expect(sizes).toEqual([1, 1, 2, 2, 4, 2].map(n => n * 1024 * 1024));
+  expect(offset).toBe(original.length);
+});

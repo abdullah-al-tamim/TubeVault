@@ -1,6 +1,6 @@
 # Windows desktop app
 
-Run `artifacts/TubeVault-Setup-0.3.2.exe` to install for the current Windows user. Python and Node are bundled or unnecessary at runtime. Microsoft Edge WebView2 must be installed. The installer adds Start menu and desktop shortcuts and offers background startup at Windows sign-in.
+Run `artifacts/TubeVault-Setup-0.3.3.exe` to install for the current Windows user. Python and Node are bundled or unnecessary at runtime. Microsoft Edge WebView2 must be installed. The installer adds Start menu and desktop shortcuts and offers background startup at Windows sign-in.
 
 The first launch opens a four-step guide: Google credentials, channel connection, watch folders, and automatic uploading. The guide is also available from Settings. Credentials are stored in Windows Credential Manager. Each user supplies their own Google Desktop OAuth client; credentials are never bundled in the public app.
 
