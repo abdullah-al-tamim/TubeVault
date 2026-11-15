@@ -30,6 +30,7 @@ import { api, setCsrf, transfer, restoreSession, recoverDesktopSession } from ".
 import { PhoneReceiverPanel } from "./components/PhoneReceiverPanel";
 import { CleanupPanel } from "./components/CleanupPanel";
 import { QueuePanel } from "./components/QueuePanel";
+import { HistoryPanel } from "./components/HistoryPanel";
 import { SetupGuide, type SetupStatus } from './components/SetupGuide';
 import { bytes, percent } from "./lib/utils";
 import "./styles.css";
@@ -49,6 +50,7 @@ type Job = {
   sha256: string;
   path: string;
   created: number;
+  history_hidden?: boolean;
   description: string;
   tags: string[];
   made_for_kids: boolean;
@@ -84,7 +86,6 @@ function App() {
     [page, setPage] = useState("Overview"),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
-    [search, setSearch] = useState(""),
     [light, setLight] = useState(localStorage.getItem("tv-light") === "true"),
     [menu, setMenu] = useState(false),
     [add, setAdd] = useState(false),
@@ -340,7 +341,6 @@ function App() {
               onClick={() => {
                 setPage(name);
                 setMenu(false);
-                setSearch("");
               }}
             >
               <Icon size={19} />
@@ -634,51 +634,13 @@ function App() {
           )}
           {page === "Upload Queue" && <QueuePanel jobs={jobs} settings={settings} desktop={!!setupStatus?.desktop} refresh={load} details={id=>actions(jobs.find(j=>j.id===id)!)}/>}
           {page === "Archive History" && !data?.preview && <CleanupPanel paused={!!settings?.paused} />}
-          {page === "Archive History" && (
-            <section className="panel">
-              <div className="panel-heading">
-                <label className="search">
-                  <Search size={17} />
-                  <input
-                    placeholder="Search videos or collections"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                  />
-                </label>
-              </div>
-              {table(
-                (page === "Archive History"
-                  ? done
-                  : jobs.filter((j) => j.state !== "COMPLETED")
-                ).filter((j) =>
-                  (j.title + j.playlist + j.sha256)
-                    .toLowerCase()
-                    .includes(search.toLowerCase()),
-                ),
-              )}
-              {page === "Archive History" &&
-                done.map((j) => (
-                  <details key={j.id} className="details">
-                    <summary>{j.title} · checksum and source</summary>
-                    <code>{j.sha256}</code>
-                    <p>{j.path}</p>
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        if (
-                          confirm(
-                            "Upload this completed video again? This explicitly creates a duplicate on YouTube.",
-                          )
-                        )
-                          run(() => api(`/jobs/${j.id}/force`, "POST"));
-                      }}
-                    >
-                      Force another upload
-                    </Button>
-                  </details>
-                ))}
-            </section>
-          )}
+          {page === "Archive History" && <HistoryPanel jobs={done} refresh={load} details={id => <>
+            {actions(jobs.find(j => j.id === id)!)}
+            <Button variant="outline" onClick={() => {
+              if (confirm("Upload this completed video again? This explicitly creates a duplicate on YouTube."))
+                run(() => api(`/jobs/${id}/force`, "POST"));
+            }}>Force another upload</Button>
+          </>} />}
           {page === "Watch Folders" && (
             <>
               <div className="cards">

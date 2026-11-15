@@ -16,8 +16,14 @@ from .security import Security
 from .scanner import Scanner
 from .imports import Imports
 from .queue_controls import control_jobs
+from .history import control_history
 
 Privacy = Literal["private", "unlisted", "public"]
+
+
+class HistoryControl(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=2000)
+    action: Literal["remove", "restore"]
 
 
 class BulkControl(BaseModel):
@@ -369,6 +375,10 @@ def create_app(config=default_config, db=None, services=None, background=True, d
     @api.post("/queue/bulk")
     def bulk(body: BulkControl):
         return control_jobs(db, body.ids, body.action)
+
+    @api.post("/history/bulk")
+    def history_bulk(body: HistoryControl):
+        return control_history(db, body.ids, body.action)
 
     @api.put("/queue/concurrency")
     def concurrency(body: ConcurrencyInput):

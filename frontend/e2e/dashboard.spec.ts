@@ -115,7 +115,7 @@ test("cleanup requires explicit confirmation for reviewed originals", async ({ p
     await page.getByRole("button", { name: "Open navigation" }).click();
   await page.getByRole("button", { name: "Archive History", exact: true }).click();
   await page.getByRole("button", { name: "Review uploaded originals" }).click();
-  await page.getByRole("button", { name: "Select all eligible originals" }).click();
+  await page.getByRole("button", { name: "Select all shown originals" }).click();
   const deleteButton = page.getByRole("button", { name: "Permanently delete 1 original(s)", exact: true });
   await expect(deleteButton).toBeDisabled();
   await page.getByLabel("Type DELETE ORIGINALS to confirm").fill("DELETE ORIGINALS");

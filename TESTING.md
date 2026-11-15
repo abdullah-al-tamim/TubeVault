@@ -1,5 +1,21 @@
 # Validation and acceptance checks
 
+## Live checklist filters - 2026-11-15
+
+- TypeScript and the production build passed. All 11 Vitest tests passed, including OR/AND checklist combinations, size boundaries, normalized paths, removed-state filtering, and fuzzy matching.
+- Five focused pytest checks passed for archive visibility, duplicate prevention, migrations and manual queue behavior. No backend behavior changed in this follow-up.
+- Playwright was attempted again, but its local test server remained unreachable in this session. Added desktop/mobile acceptance checks for the originals-review checklist, clearing selection and typed confirmation after filtering, and submitting only the visible selected original. Existing archive/queue checks now exercise folder checklists too. These browser checks remain unverified.
+- Release 0.3.4 includes the shared file filters in the desktop package. No installed application, source footage, or remote resource was changed during development.
+
+## Search and removal checks - 2026-11-14
+
+- TypeScript and production build passed; all 8 Vitest tests passed, including path, Unicode, multiple-word and typo matching.
+- The backend subset completed with 54 passing tests, 1 deliberately skipped live test, 4 deselected HTTP tests and 4 environment-related failures. Archive visibility, restoration, audit evidence, deduplication, queue/recovery and both schema migrations passed.
+- The four failures were in existing legacy-data/import flows: SQLite URI handling for the sandbox's `#!` temporary path and denied hard-link creation. Those flows were not changed.
+- The full pytest run was interrupted after its HTTP tests hung creating asyncio's socket pair. A focused run confirmed the block in `socket._fallback_socketpair` before the HTTP client could start.
+- Playwright was attempted, but its local web server did not become reachable in this environment; browser acceptance checks remain unverified. New desktop/mobile checks cover fuzzy folder search, filtered selection, cancelled confirmation, server failure, removal and archive restoration.
+- No live upload, source-footage removal, remote deletion, or installed desktop application upgrade was performed.
+
 ## Recorded development result — 2026-11-05
 
 - Python 3.12.16: **35 backend tests passed**, one live integration test skipped deliberately.

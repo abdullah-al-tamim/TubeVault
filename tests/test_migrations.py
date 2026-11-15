@@ -26,4 +26,4 @@ def test_upgrade_existing_job_table_preserves_rows(tmp_path):
     config.attributes['database_path']=path
     command.upgrade(config,'head')
     with sqlite3.connect(path) as conn:
-        assert conn.execute('SELECT id,state,control_requested FROM upload_jobs').fetchone()==('existing','PAUSED','')
+        assert conn.execute('SELECT id,state,control_requested,history_hidden FROM upload_jobs').fetchone()==('existing','PAUSED','',0)
