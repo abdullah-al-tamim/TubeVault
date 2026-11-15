@@ -414,3 +414,25 @@ def test_cleanup_verifies_remote_and_local_before_unlink(db, rig, video):
     with db.session() as s:
         assert s.get(Job, job_id).state == "COMPLETED"
         assert s.get(Instance, candidate["id"]) is not None
+
+def test_cleanup_saved_verification_after_quota_error(db, rig, video):
+    from tubevault.cleanup import Cleanup
+    from tubevault.db import Video
+    worker, yt, job_id = rig
+    worker.step()
+    db.configure({"paused": True})
+    cleanup = Cleanup(db, yt, Scanner(db))
+    candidate, = cleanup.preview()
+    ids = [candidate["id"]]
+    yt.video.side_effect = APIError("quotaExceeded", quota=True)
+    assert cleanup.delete(ids)[0]["can_use_saved"]
+    assert video.exists()
+    with db.session() as session:
+        record = session.get(Video, candidate["video_id"])
+        record.processing = "processing"
+    assert not cleanup.delete(ids, True)[0]["ok"]
+    assert video.exists()
+    with db.session() as session:
+        session.get(Video, candidate["video_id"]).processing = "succeeded"
+    assert cleanup.delete(ids, True)[0]["ok"]
+    assert not video.exists()

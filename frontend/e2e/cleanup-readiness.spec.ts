@@ -53,7 +53,10 @@ test("delete prerequisites explain running queue and wait for active operations"
         ],
       });
     deleted++;
+    if (deleted === 1)
+      return r.fulfill({ json: [{ id: "original", ok: false, reason: "quotaExceeded", can_use_saved: true }] });
     expect(r.request().postDataJSON()).toEqual({
+      use_saved_verification: true,
       ids: ["original"],
       confirmation: "DELETE ORIGINALS",
     });
@@ -72,9 +75,6 @@ test("delete prerequisites explain running queue and wait for active operations"
   await page
     .getByRole("button", { name: "Select all shown originals" })
     .click();
-  await page
-    .getByLabel("Type DELETE ORIGINALS to confirm")
-    .fill("DELETE ORIGINALS");
   const remove = page.getByRole("button", {
     name: "Permanently delete 1 original(s)",
     exact: true,
@@ -110,13 +110,18 @@ test("delete prerequisites explain running queue and wait for active operations"
   await page
     .getByRole("button", { name: "Select all shown originals" })
     .click();
-  await page
-    .getByLabel("Type DELETE ORIGINALS to confirm")
-    .fill(" DELETE ORIGINALS ");
   await expect(remove).toBeEnabled();
+  page.once("dialog", d => d.accept());
   await remove.click();
+  await expect(page.getByRole("status")).toContainText("quotaExceeded");
+  const retry = page.getByRole("button", { name: "Delete using saved verification" });
+  page.once("dialog", d => d.dismiss());
+  await retry.click();
+  expect(deleted).toBe(1);
+  page.once("dialog", d => d.accept());
+  await retry.click();
   await expect(page.getByRole("status")).toHaveText(
     "Deleted 1 local original(s).",
   );
-  expect(deleted).toBe(1);
+  expect(deleted).toBe(2);
 });

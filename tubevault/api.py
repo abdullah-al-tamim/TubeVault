@@ -96,6 +96,7 @@ class PhoneStart(BaseModel):
 
 class CleanupInput(BaseModel):
     ids: list[str] = Field(min_length=1, max_length=2000)
+    use_saved_verification: bool = False
     confirmation: Literal["DELETE ORIGINALS"]
 
 
@@ -358,7 +359,7 @@ def create_app(config=default_config, db=None, services=None, background=True, d
         if request.client.host not in {"127.0.0.1", "::1"}:
             raise HTTPException(403, "Cleanup is available on this PC only")
         try:
-            return cleanup.delete(body.ids)
+            return cleanup.delete(body.ids, body.use_saved_verification)
         except ValueError as error:
             raise HTTPException(409, str(error)) from None
 

@@ -5,7 +5,6 @@ const ready = {
   paused: true,
   activeUploads: 0,
   selectedCount: 1,
-  confirmation: "DELETE ORIGINALS",
   phase: null,
 };
 describe("cleanup readiness", () => {
@@ -20,16 +19,10 @@ describe("cleanup readiness", () => {
       "Waiting for 2 active upload operation(s)",
     );
   });
-  it("requires selection and the confirmation phrase", () => {
+  it("requires selection", () => {
     expect(cleanupBlocker({ ...ready, selectedCount: 0 })).toContain(
       "Select at least one",
     );
-    expect(
-      cleanupBlocker({ ...ready, confirmation: "delete originals" }),
-    ).toContain("Type DELETE ORIGINALS exactly");
-    expect(
-      cleanupBlocker({ ...ready, confirmation: " DELETE ORIGINALS " }),
-    ).toBe("");
   });
   it("describes real pending work separately from ineligible actions", () => {
     expect(cleanupBlocker({ ...ready, phase: "delete" })).toContain(
