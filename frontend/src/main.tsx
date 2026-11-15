@@ -51,6 +51,7 @@ type Job = {
   path: string;
   created: number;
   history_hidden?: boolean;
+  claimed?: boolean;
   description: string;
   tags: string[];
   made_for_kids: boolean;
@@ -633,7 +634,7 @@ function App() {
             </>
           )}
           {page === "Upload Queue" && <QueuePanel jobs={jobs} settings={settings} desktop={!!setupStatus?.desktop} refresh={load} details={id=>actions(jobs.find(j=>j.id===id)!)}/>}
-          {page === "Archive History" && !data?.preview && <CleanupPanel paused={!!settings?.paused} />}
+          {page === "Archive History" && !data?.preview && <CleanupPanel paused={!!settings?.paused} activeUploads={jobs.filter(j => j.claimed).length} refresh={load} />}
           {page === "Archive History" && <HistoryPanel jobs={done} refresh={load} details={id => <>
             {actions(jobs.find(j => j.id === id)!)}
             <Button variant="outline" onClick={() => {

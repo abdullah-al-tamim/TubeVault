@@ -1,28 +1,62 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { api } from "../api";
 import { emptyFilters, filterFiles } from "../lib/file-filters";
 import { FileFilterBar } from "./FileFilterBar";
 import { bytes } from "../lib/utils";
 import { Button } from "./ui/button";
+import { cleanupBlocker, type CleanupPhase } from "../lib/cleanup-readiness";
 
 type Original = { id: string; path: string; size: number; video_id: string };
 type Result = { id: string; ok: boolean; reason?: string };
 
-export function CleanupPanel({ paused }: { paused: boolean }) {
+export function CleanupPanel({
+  paused,
+  activeUploads = 0,
+  refresh,
+}: {
+  paused: boolean;
+  activeUploads?: number;
+  refresh?: () => Promise<void>;
+}) {
+  const reasonId = useId();
   const [files, setFiles] = useState<Original[]>([]);
   const [filters, setFilters] = useState(emptyFilters);
   const [reviewed, setReviewed] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [confirmation, setConfirmation] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [phase, setPhase] = useState<CleanupPhase>(null);
+  const busy = phase !== null;
   const [notice, setNotice] = useState("");
   const visible = filterFiles(files, filters);
   const chosen = visible.filter((file) => selected.includes(file.id));
-  const ready =
-    paused && chosen.length > 0 && confirmation === "DELETE ORIGINALS";
+  const blocker = cleanupBlocker({
+    paused,
+    activeUploads,
+    selectedCount: chosen.length,
+    confirmation,
+    phase,
+  });
+  const ready = !blocker;
+
+  async function pauseQueue() {
+    setPhase("pause");
+    setNotice("");
+    try {
+      await api("/queue/pause", "POST");
+      await refresh?.();
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "Could not pause the upload queue.",
+      );
+    } finally {
+      setPhase(null);
+    }
+  }
 
   async function review() {
-    setBusy(true);
+    setPhase("review");
     setNotice("");
     setConfirmation("");
     setSelected([]);
@@ -35,19 +69,19 @@ export function CleanupPanel({ paused }: { paused: boolean }) {
       setFiles([]);
       setNotice(error instanceof Error ? error.message : "Review failed.");
     } finally {
-      setBusy(false);
+      setPhase(null);
     }
   }
 
   async function remove() {
     if (!ready || busy) return;
-    setBusy(true);
+    setPhase("delete");
     setNotice("");
     setConfirmation("");
     try {
       const results = await api<Result[]>("/cleanup", "POST", {
         ids: chosen.map((file) => file.id),
-        confirmation,
+        confirmation: confirmation.trim(),
       });
       const deleted = new Set(
         results.filter((result) => result.ok).map((result) => result.id),
@@ -70,7 +104,7 @@ export function CleanupPanel({ paused }: { paused: boolean }) {
           : "Cleanup failed. Refresh the review before retrying.",
       );
     } finally {
-      setBusy(false);
+      setPhase(null);
     }
   }
 
@@ -78,7 +112,12 @@ export function CleanupPanel({ paused }: { paused: boolean }) {
     <section className="panel queue-panel">
       <div className="panel-heading">
         <h2>Free up space</h2>
-        <Button variant="outline" disabled={busy} onClick={review}>
+        <Button
+          variant="outline"
+          disabled={busy}
+          aria-busy={phase === "review"}
+          onClick={review}
+        >
           Review uploaded originals
         </Button>
       </div>
@@ -193,9 +232,32 @@ export function CleanupPanel({ paused }: { paused: boolean }) {
                 onChange={(event) => setConfirmation(event.target.value)}
               />
             </label>
-            <Button disabled={busy || !ready} onClick={remove}>
-              Permanently delete {chosen.length} original(s)
+            {!paused && (
+              <Button
+                variant="outline"
+                disabled={busy}
+                onClick={pauseQueue}
+                aria-busy={phase === "pause"}
+              >
+                {phase === "pause"
+                  ? "Pausing queue…"
+                  : "Pause queue to enable deletion"}
+              </Button>
+            )}
+            <Button
+              disabled={!ready}
+              onClick={remove}
+              aria-busy={phase === "delete"}
+              aria-describedby={reasonId}
+            >
+              {phase === "delete"
+                ? "Verifying and deleting originals…"
+                : `Permanently delete ${chosen.length} original(s)`}
             </Button>
+            <p id={reasonId} aria-live="polite">
+              {blocker ||
+                `Ready to permanently delete ${chosen.length} selected original(s).`}
+            </p>
           </div>
         </>
       )}

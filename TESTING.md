@@ -1,5 +1,12 @@
 # Validation and acceptance checks
 
+## Delete-button readiness - 2026-11-15
+
+- Reproduced the reported combination in code: a selected original and correctly typed confirmation still leave deletion disabled while the queue runs. Global disabled-button styling incorrectly used a wait cursor, making this appear to be an endless operation.
+- Version 0.3.5 replaces that cursor with not-allowed, shows the blocking reason next to the button, exposes a queue-pause action, waits for claimed upload operations, and labels actual deletion work explicitly. Whitespace around the confirmation phrase is trimmed before the existing exact API confirmation is submitted.
+- TypeScript and production build passed; 15 Vitest tests and five focused pytest checks passed. Added desktop/mobile Playwright coverage of running-queue prerequisites, paused-but-active operations, correct cursor/busy state, and confirmed deletion using mocked endpoints. Browser execution remains blocked by the local test-server limitation in this environment.
+- No user footage was deleted and no live upload was run. The deletion backend and its remote/checksum checks were not changed.
+
 ## Live checklist filters - 2026-11-15
 
 - TypeScript and the production build passed. All 11 Vitest tests passed, including OR/AND checklist combinations, size boundaries, normalized paths, removed-state filtering, and fuzzy matching.

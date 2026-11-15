@@ -43,8 +43,9 @@ button {
 }
 button:disabled {
   opacity: 0.5;
-  cursor: wait;
+  cursor: not-allowed;
 }
+button:disabled[aria-busy="true"] { cursor: progress; }
 button {
   background: none;
   border: 0;
