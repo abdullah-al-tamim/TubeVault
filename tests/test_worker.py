@@ -249,8 +249,15 @@ def test_remote_title_duplicate_never_starts_upload(db, rig):
     worker.step()
     yt.start.assert_not_called()
     with db.session() as s:
-        assert s.get(Job,job_id).state=="DUPLICATE_TITLE"
-        assert s.get(Job,job_id).video_id is None
+        assert s.get(Job,job_id).state=="PROCESSING"
+        assert s.get(Job,job_id).video_id == "remotevideo"
+    worker.step()
+    yt.insert.assert_called_once_with("playlist", "remotevideo")
+    yt.start.assert_not_called()
+    with db.session() as s:
+        assert s.get(Job, job_id).state == "COMPLETED"
+    from tubevault.cleanup import Cleanup
+    assert not Cleanup(db, yt, Scanner(db)).preview()
 
 
 def test_title_check_failure_blocks_new_session(db, rig):

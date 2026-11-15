@@ -265,11 +265,15 @@ def create_app(config=default_config, db=None, services=None, background=True, d
 
     def snapshot():
         with db.session() as s:
+            started = set(s.scalars(select(Event.job_id).where(
+                Event.kind == "transition", Event.message.like("%→ UPLOADING:%")).distinct()))
+            started.update(s.scalars(select(UploadSession.job_id)))
+            linked = set(s.scalars(select(Event.job_id).where(Event.kind == "title_link")))
             jobs = []
             for job in s.scalars(select(Job).order_by(Job.created.desc()).limit(2000)):
                 item = rowdict(job)
                 identity = s.get(Identity, job.identity_id)
-                item.update(size=identity.size, sha256=identity.sha256,
+                item.update(upload_attempted=job.id in started or job.progress > 0, title_linked=job.id in linked, size=identity.size, sha256=identity.sha256,
                             path=s.get(Instance, job.instance_id).path, playlist=s.get(Mapping, job.mapping_id).title)
                 jobs.append(item)
             account = s.scalar(select(Account))
