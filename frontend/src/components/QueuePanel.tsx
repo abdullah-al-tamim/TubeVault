@@ -2,6 +2,8 @@ import { useState, type ReactNode } from "react";
 import { Button } from "./ui/button";
 import { api } from "../api";
 import { bytes, percent } from "../lib/utils";
+import { emptyFilters, filterFiles } from "../lib/file-filters";
+import { FileFilterBar } from "./FileFilterBar";
 
 type QueueJob = {
   id: string;
@@ -10,6 +12,7 @@ type QueueJob = {
   size: number;
   progress: number;
   playlist: string;
+  path?: string;
   error: string;
   claimed?: boolean;
   next_attempt?: number;
@@ -29,19 +32,25 @@ export function QueuePanel({
   details: (id: string) => ReactNode;
 }) {
   const [selected, setSelected] = useState<string[]>([]),
-    [search, setSearch] = useState(""),
+    [filters, setFilters] = useState(emptyFilters),
     [filter, setFilter] = useState("queue"),
     [paths, setPaths] = useState(""),
     [busy, setBusy] = useState(false),
     [notice, setNotice] = useState("");
   const removed = new Set(["SKIPPED", "CANCELLED", "REMOVED"]);
-  const visible = jobs.filter(
+  const displayState = (j: QueueJob) =>
+    j.control_requested && removed.has(j.control_requested)
+      ? j.control_requested
+      : j.state;
+  const inView = jobs.filter(
     (j) =>
       j.state !== "COMPLETED" &&
       (filter === "all" ||
-        (filter === "queue" ? !removed.has(j.state) : j.state === filter)) &&
-      (j.title + " " + j.playlist).toLowerCase().includes(search.toLowerCase()),
+        (filter === "queue"
+          ? !removed.has(displayState(j))
+          : displayState(j) === filter)),
   );
+  const visible = filterFiles(inView, filters);
   const ids = visible.map((j) => j.id),
     picked = selected.filter((id) => ids.includes(id));
   async function run(action: () => Promise<void>) {
@@ -57,6 +66,13 @@ export function QueuePanel({
     }
   }
   async function control(action: string, targets = picked) {
+    if (
+      action === "remove" &&
+      !confirm(
+        `Remove ${targets.length} video(s) from the upload queue? Source files and YouTube videos are kept. You can restore entries using the Removed filter.`,
+      )
+    )
+      return;
     await run(async () => {
       const response = await api("/queue/bulk", "POST", {
         ids: targets,
@@ -98,7 +114,9 @@ export function QueuePanel({
       </div>
       {settings?.cooldown > Date.now() / 1000 && (
         <p className="queue-tools" role="status">
-          Uploads waiting until {new Date(settings.cooldown * 1000).toLocaleTimeString()} · {settings.cooldown_reason || "YouTube limit"}
+          Uploads waiting until{" "}
+          {new Date(settings.cooldown * 1000).toLocaleTimeString()} ·{" "}
+          {settings.cooldown_reason || "YouTube limit"}
         </p>
       )}
       <div className="queue-tools">
@@ -198,13 +216,19 @@ export function QueuePanel({
           Add videos to queue
         </Button>
       </details>
+      <FileFilterBar
+        files={inView}
+        value={filters}
+        shown={visible.length}
+        statuses
+        disabled={busy}
+        searchLabel="Search queue"
+        onChange={(value) => {
+          setFilters(value);
+          setSelected([]);
+        }}
+      />
       <div className="queue-tools">
-        <input
-          aria-label="Search queue"
-          placeholder="Search videos or collections"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
         <select
           aria-label="Queue status filter"
           value={filter}
@@ -290,19 +314,29 @@ export function QueuePanel({
                 <td>
                   <strong>{j.title}</strong>
                   <small>{j.playlist}</small>
+                  <small className="path">{j.path}</small>
                 </td>
                 <td>
                   {j.control_requested && j.claimed
                     ? `${j.control_requested} requested…`
-                    : j.control_requested || (j.state === "UPLOAD_UNCERTAIN" ? "Waiting to check YouTube"
-                      : j.state === "FAILED_RETRYABLE" ? "Waiting to retry" : j.state)}
+                    : j.control_requested ||
+                      (j.state === "UPLOAD_UNCERTAIN"
+                        ? "Waiting to check YouTube"
+                        : j.state === "FAILED_RETRYABLE"
+                          ? "Waiting to retry"
+                          : j.state)}
                   {j.error && <small>{j.error}</small>}
-                  {!j.control_requested && (j.state === "UPLOAD_UNCERTAIN" || j.state === "FAILED_RETRYABLE") && (
-                    <small>{settings?.paused ? "Start the queue to enable automatic checks."
-                      : (j.next_attempt ?? 0) > Date.now() / 1000
-                        ? `Next check at ${new Date(j.next_attempt! * 1000).toLocaleTimeString()}`
-                        : "Check due when the queue can run"}</small>
-                  )}
+                  {!j.control_requested &&
+                    (j.state === "UPLOAD_UNCERTAIN" ||
+                      j.state === "FAILED_RETRYABLE") && (
+                      <small>
+                        {settings?.paused
+                          ? "Start the queue to enable automatic checks."
+                          : (j.next_attempt ?? 0) > Date.now() / 1000
+                            ? `Next check at ${new Date(j.next_attempt! * 1000).toLocaleTimeString()}`
+                            : "Check due when the queue can run"}
+                      </small>
+                    )}
                 </td>
                 <td>
                   {percent(j.progress, j.size)}% · {bytes(j.progress)} /{" "}
