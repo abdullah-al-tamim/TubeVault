@@ -15,6 +15,8 @@ from .config import config as default_config
 from .security import Security
 from .scanner import Scanner
 from .imports import Imports
+from .pull_api import pull_routes
+from .pulls import Pulls
 from .queue_controls import control_jobs
 from .history import control_history
 
@@ -179,6 +181,7 @@ def create_app(config=default_config, db=None, services=None, background=True, d
         return {"csrf": csrf}
 
     api = APIRouter(prefix="/api", dependencies=[Depends(security.check)])
+    api.include_router(pull_routes(Pulls(config.data_dir / "pulls")))
 
     if desktop:
         @app.post('/api/desktop/session')

@@ -5,6 +5,7 @@ import {
   ArrowUpRight,
   Check,
   CloudUpload,
+  Download,
   Folder,
   HardDrive,
   LayoutDashboard,
@@ -29,6 +30,7 @@ import { Button } from "./components/ui/button";
 import { api, setCsrf, transfer, restoreSession, recoverDesktopSession } from "./api";
 import { PhoneReceiverPanel } from "./components/PhoneReceiverPanel";
 import { CleanupPanel } from "./components/CleanupPanel";
+import { PullPanel } from "./components/PullPanel";
 import { QueuePanel } from "./components/QueuePanel";
 import { HistoryPanel } from "./components/HistoryPanel";
 import { SetupGuide, type SetupStatus } from './components/SetupGuide';
@@ -70,6 +72,7 @@ type Snapshot = {
 const pages = [
   ["Overview", LayoutDashboard],
   ["Upload Queue", CloudUpload],
+  ["Video Pull", Download],
   ["Watch Folders", Folder],
   ["Playlists", ListVideo],
   ["Archive History", Archive],
@@ -414,6 +417,7 @@ function App() {
                         "iPhone Imports":
                           "From your camera roll to your own PC, in original quality.",
                         Settings: "Make the vault work on your terms.",
+                        "Video Pull": "Save YouTube video or audio to this PC for editing.",
                         Diagnostics: "Understand the health of your archive.",
                       } as Record<string, string>
                     )[page]}
@@ -858,6 +862,7 @@ function App() {
               </section>
             </div>
           )}
+          {page === "Video Pull" && (data?.preview ? <p>Open the local TubeVault app to pull media.</p> : <PullPanel />)}
           {page === "Diagnostics" && (
             <>
               <section className="stats">

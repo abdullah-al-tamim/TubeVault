@@ -4,7 +4,7 @@ A local Windows video archive with a React dashboard, durable SQLite upload queu
 
 ## Run on Windows
 
-**Desktop app:** install `artifacts/TubeVault-Setup-0.3.4.exe`, then open TubeVault from the desktop or Start menu. The first-run guide walks through Google credentials, channel connection, folders and background startup. See [DESKTOP.md](DESKTOP.md) for installation and build instructions.
+**Desktop app:** install `artifacts/TubeVault-Setup-0.3.10.exe`, then open TubeVault from the desktop or Start menu. The first-run guide walks through Google credentials, channel connection, folders and background startup. See [DESKTOP.md](DESKTOP.md) for installation and build instructions.
 
 **Just want to see the UI?** Double-click `Start-Preview.cmd` for an isolated sample-data preview. See [PREVIEW.md](PREVIEW.md). A source checkout needs `npm ci` and `npm run build` in `frontend` first; the preview ZIP already includes that build.
 
@@ -45,3 +45,17 @@ Duplicate content in another local collection is recorded as skipped; it is not 
 - [Tests, validation and remaining limitations](TESTING.md)
 
 Google credentials and footage belong outside Git. The application stores tokens and upload session URLs in the current user's Windows Credential Manager. SQLite history remains under `data/`. Back it up with `.venv\Scripts\python.exe scripts\backup.py`.
+
+## Pull YouTube media for editing
+
+In **Video Pull**, paste a single watch, Shorts or share link and choose the format. Best available preserves the selected YouTube streams and merges separate tracks without re-encoding. MP4 selects H.264 video and compatible audio. A height limit selects the best matching version at or below that limit. Audio choices include the native audio stream, M4A and MP3. Availability depends on the video and what YouTube serves to this PC. A YouTube playback stream can differ from the uploaded camera original.
+
+Windows setup selects the download tools by default. If a pull reports missing tools, open **Repair Video Pull Tools** from Start and retry. For a source install, run `powershell -ExecutionPolicy Bypass -File .\scripts\install-pull-tools.ps1` from the project or installed app folder once, then restart TubeVault. This installs the official yt-dlp CLI, FFmpeg/ffprobe and Deno through WinGet. Keep yt-dlp current with `winget upgrade --id yt-dlp.yt-dlp --exact`.
+
+For a local ChatGPT/Codex edit, provide the link and ask it to run the installed command and import the returned JSON `path` into the timeline. From PowerShell:
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\TubeVault\TubeVault-Pull.exe" "https://youtu.be/VIDEO_ID_HERE" --format mp4 --height 1080
+```
+
+From a source checkout, use `.\.venv\Scripts\python.exe -m tubevault.pulls` with the same arguments. Omit the format and height for highest available. Use `--format audio` for native audio or `--format mp3` for MP3. Add `--output "D:\Edits\Kuakata\References"` to place the pull in its own subfolder there. A successful command exits with code 0. By default the installed desktop dashboard and command share `%USERPROFILE%\TubeVault\data\pulls`. The server uses its configured data directory. Custom output folders stay outside dashboard history. Each pull has a separate folder and a status receipt, including after failure. The dashboard lists the latest 100.

@@ -10,4 +10,6 @@ a = Analysis([str(root/'desktop_entry.py')], pathex=[str(root)], binaries=web_bi
 pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name='TubeVault', debug=False, bootloader_ignore_signals=False,
           strip=False, upx=False, console=False, icon=str(root/'assets'/'tubevault.ico'))
-coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name='TubeVault')
+pull = EXE(pyz, a.scripts, [], exclude_binaries=True, name='TubeVault-Pull', debug=False,
+           strip=False, upx=False, console=True, icon=str(root/'assets'/'tubevault.ico'))
+coll = COLLECT(exe, pull, a.binaries, a.datas, strip=False, upx=False, name='TubeVault')

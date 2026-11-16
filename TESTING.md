@@ -83,3 +83,11 @@ Before treating this as an unattended archive, verify:
 - Interrupted playlist creation is reconciled using the durable description marker. A persisted creation intent prevents a second create if Google listing visibility is delayed; select the existing playlist ID manually if it remains ambiguous.
 - An uncertain upload with no discoverable remote video stays blocked. Resetting such a job is intentionally not an automatic retry path.
 - YouTube's API has no checksum proof that remote media equals your source and YouTube processing is lossy. The stored checksum proves the local identity; it is not a guarantee of byte-perfect recovery from YouTube.
+
+## Video Pull (0.3.9)
+
+The three pull-specific pytest tests passed, covering URL and format validation, authenticated creation, CSRF, completed-file delivery, missing tools and interrupted-job recovery. The HTTP tests used an in-memory event loop with polling because this Windows sandbox blocks socket pairs. A packaged CLI smoke test used a simulated yt-dlp executable and verified the reported file path, title, resolution and frame rate. TypeScript, the production build and all 15 Vitest checks passed.
+
+The full pytest run with that event loop had 68 passes, 1 skipped live test and 8 failures in existing phone/import, listener and preview tests involving hard links or local networking. Playwright could not reach the local test server, and an offline browser attempt failed during Edge startup. The new desktop/mobile pull test is present. Live YouTube extraction, real FFmpeg output, tool installation through WinGet and importing a downloaded file into DaVinci Resolve still need verification on a networked PC.
+
+Version 0.3.10 selects download tools by default in Windows Setup, adds a Start menu repair command and refreshes tool lookup for an already-running desktop app. A Windows regression test exercises WinGet link discovery with a stale process PATH. Live WinGet installation and YouTube downloads still require verification on the user's PC.
