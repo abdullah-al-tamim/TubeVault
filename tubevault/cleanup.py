@@ -23,7 +23,8 @@ class Cleanup:
                 .join(Identity, Job.identity_id == Identity.id)
                 .join(Account, Job.account_id == Account.id)
                 .where(Job.state == "COMPLETED", Job.video_id.is_not(None),
-                       Instance.identity_id == Job.identity_id)
+                       Instance.identity_id == Job.identity_id,
+                       ~select(Event.id).where(Event.kind == "title_link", Event.job_id == Job.id).exists())
                 .order_by(Job.created)
             ))
         candidates = {}
