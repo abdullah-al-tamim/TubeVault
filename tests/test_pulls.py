@@ -60,9 +60,9 @@ def test_pull_restart_and_tool_failure(tmp_path, monkeypatch):
 def test_winget_links_after_desktop_start(tmp_path, monkeypatch):
     links = tmp_path / "Microsoft" / "WinGet" / "Links"
     links.mkdir(parents=True)
-    tool = links / "yt-dlp.exe"
+    tool = links / "tubevault-test-tool.exe"
     tool.touch()
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
     monkeypatch.setenv("PATH", str(tmp_path))
     assert str(links) in transport.tool_path().split(transport.os.pathsep)
-    assert Path(transport.shutil.which("yt-dlp", path=transport.tool_path())) == tool
+    assert Path(transport.shutil.which(tool.stem, path=transport.tool_path())) == tool
