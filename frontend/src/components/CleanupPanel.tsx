@@ -7,7 +7,7 @@ import { Button } from "./ui/button";
 import { cleanupBlocker, type CleanupPhase } from "../lib/cleanup-readiness";
 
 type Original = { id: string; path: string; size: number; video_id: string };
-type Result = { id: string; ok: boolean; reason?: string };
+type Result = { id: string; ok: boolean; can_use_saved?: boolean; reason?: string };
 
 export function CleanupPanel({
   paused,
@@ -23,7 +23,7 @@ export function CleanupPanel({
   const [filters, setFilters] = useState(emptyFilters);
   const [reviewed, setReviewed] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
-  const [confirmation, setConfirmation] = useState("");
+  const [retryIds, setRetryIds] = useState<string[]>([]);
   const [phase, setPhase] = useState<CleanupPhase>(null);
   const busy = phase !== null;
   const [notice, setNotice] = useState("");
@@ -33,7 +33,6 @@ export function CleanupPanel({
     paused,
     activeUploads,
     selectedCount: chosen.length,
-    confirmation,
     phase,
   });
   const ready = !blocker;
@@ -58,8 +57,8 @@ export function CleanupPanel({
   async function review() {
     setPhase("review");
     setNotice("");
-    setConfirmation("");
     setSelected([]);
+    setRetryIds([]);
     try {
       const candidates = await api<Original[]>("/cleanup");
       setFiles(candidates);
@@ -73,15 +72,20 @@ export function CleanupPanel({
     }
   }
 
-  async function remove() {
+  async function remove(useSaved = false) {
     if (!ready || busy) return;
+    const target = chosen.length === 1 ? chosen[0].path : chosen.length + " selected files (" + bytes(chosen.reduce((sum, f) => sum + f.size, 0)) + ")";
+    const message = useSaved
+      ? "TubeVault previously verified processing, but cannot confirm the current YouTube copy. Permanently delete " + target + " from this PC using the saved record?"
+      : "Permanently delete " + target + " from this PC? This cannot be undone. The YouTube copy stays available.";
+    if (!window.confirm(message)) return;
     setPhase("delete");
     setNotice("");
-    setConfirmation("");
     try {
       const results = await api<Result[]>("/cleanup", "POST", {
+        ...(useSaved ? {use_saved_verification: true} : {}),
         ids: chosen.map((file) => file.id),
-        confirmation: confirmation.trim(),
+        confirmation: "DELETE ORIGINALS",
       });
       const deleted = new Set(
         results.filter((result) => result.ok).map((result) => result.id),
@@ -93,7 +97,8 @@ export function CleanupPanel({
             `${files.find((file) => file.id === result.id)?.path}: ${result.reason}`,
         );
       setFiles(files.filter((file) => !deleted.has(file.id)));
-      setSelected([]);
+      setSelected(chosen.filter(file => !deleted.has(file.id)).map(file => file.id));
+      setRetryIds(results.filter(r => r.can_use_saved).map(r => r.id));
       setNotice(
         [`Deleted ${deleted.size} local original(s).`, ...failures].join("\n"),
       );
@@ -135,11 +140,7 @@ export function CleanupPanel({
         {!paused && (
           <p>Pause the entire upload queue before deleting originals.</p>
         )}
-        {notice && (
-          <p role="status" style={{ whiteSpace: "pre-wrap" }}>
-            {notice}
-          </p>
-        )}
+
       </div>
       {reviewed && (
         <FileFilterBar
@@ -151,7 +152,6 @@ export function CleanupPanel({
           onChange={(value) => {
             setFilters(value);
             setSelected([]);
-            setConfirmation("");
           }}
         />
       )}
@@ -163,7 +163,6 @@ export function CleanupPanel({
               disabled={busy || !visible.length}
               onClick={() => {
                 setSelected(visible.map((file) => file.id));
-                setConfirmation("");
               }}
             >
               Select all shown originals
@@ -193,7 +192,6 @@ export function CleanupPanel({
                         disabled={busy}
                         checked={selected.includes(file.id)}
                         onChange={(event) => {
-                          setConfirmation("");
                           setSelected(
                             event.target.checked
                               ? [...selected, file.id]
@@ -224,14 +222,7 @@ export function CleanupPanel({
             )}
           </div>
           <div className="queue-tools">
-            <label>
-              Type DELETE ORIGINALS to confirm
-              <input
-                value={confirmation}
-                disabled={busy}
-                onChange={(event) => setConfirmation(event.target.value)}
-              />
-            </label>
+
             {!paused && (
               <Button
                 variant="outline"
@@ -246,7 +237,7 @@ export function CleanupPanel({
             )}
             <Button
               disabled={!ready}
-              onClick={remove}
+              onClick={() => remove()}
               aria-busy={phase === "delete"}
               aria-describedby={reasonId}
             >
@@ -254,6 +245,11 @@ export function CleanupPanel({
                 ? "Verifying and deleting originals…"
                 : `Permanently delete ${chosen.length} original(s)`}
             </Button>
+            {chosen.length > 0 && chosen.every(file => retryIds.includes(file.id)) && (
+              <Button variant="outline" disabled={!ready} onClick={() => remove(true)}>
+                Delete using saved verification
+              </Button>
+            )}
             <p id={reasonId} aria-live="polite">
               {blocker ||
                 `Ready to permanently delete ${chosen.length} selected original(s).`}
@@ -261,6 +257,11 @@ export function CleanupPanel({
           </div>
         </>
       )}
+        {notice && (
+          <p role="status" style={{ whiteSpace: "pre-wrap" }}>
+            {notice}
+          </p>
+        )}
     </section>
   );
 }

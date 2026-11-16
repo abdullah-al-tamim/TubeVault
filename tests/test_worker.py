@@ -249,8 +249,15 @@ def test_remote_title_duplicate_never_starts_upload(db, rig):
     worker.step()
     yt.start.assert_not_called()
     with db.session() as s:
-        assert s.get(Job,job_id).state=="DUPLICATE_TITLE"
-        assert s.get(Job,job_id).video_id is None
+        assert s.get(Job,job_id).state=="PROCESSING"
+        assert s.get(Job,job_id).video_id == "remotevideo"
+    worker.step()
+    yt.insert.assert_called_once_with("playlist", "remotevideo")
+    yt.start.assert_not_called()
+    with db.session() as s:
+        assert s.get(Job, job_id).state == "COMPLETED"
+    from tubevault.cleanup import Cleanup
+    assert not Cleanup(db, yt, Scanner(db)).preview()
 
 
 def test_title_check_failure_blocks_new_session(db, rig):
@@ -414,3 +421,25 @@ def test_cleanup_verifies_remote_and_local_before_unlink(db, rig, video):
     with db.session() as s:
         assert s.get(Job, job_id).state == "COMPLETED"
         assert s.get(Instance, candidate["id"]) is not None
+
+def test_cleanup_saved_verification_after_quota_error(db, rig, video):
+    from tubevault.cleanup import Cleanup
+    from tubevault.db import Video
+    worker, yt, job_id = rig
+    worker.step()
+    db.configure({"paused": True})
+    cleanup = Cleanup(db, yt, Scanner(db))
+    candidate, = cleanup.preview()
+    ids = [candidate["id"]]
+    yt.video.side_effect = APIError("quotaExceeded", quota=True)
+    assert cleanup.delete(ids)[0]["can_use_saved"]
+    assert video.exists()
+    with db.session() as session:
+        record = session.get(Video, candidate["video_id"])
+        record.processing = "processing"
+    assert not cleanup.delete(ids, True)[0]["ok"]
+    assert video.exists()
+    with db.session() as session:
+        session.get(Video, candidate["video_id"]).processing = "succeeded"
+    assert cleanup.delete(ids, True)[0]["ok"]
+    assert not video.exists()

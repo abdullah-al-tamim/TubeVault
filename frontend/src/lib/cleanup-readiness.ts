@@ -1,17 +1,14 @@
-export const cleanupConfirmation = "DELETE ORIGINALS";
 export type CleanupPhase = "review" | "pause" | "delete" | null;
 
 export function cleanupBlocker({
   paused,
   activeUploads,
   selectedCount,
-  confirmation,
   phase,
 }: {
   paused: boolean;
   activeUploads: number;
   selectedCount: number;
-  confirmation: string;
   phase: CleanupPhase;
 }): string {
   if (phase === "delete")
@@ -22,7 +19,5 @@ export function cleanupBlocker({
   if (activeUploads > 0)
     return `Waiting for ${activeUploads} active upload operation(s) to stop. The queue is paused; deletion will become available when they finish.`;
   if (!selectedCount) return "Select at least one original file to delete.";
-  if (confirmation.trim() !== cleanupConfirmation)
-    return "Type DELETE ORIGINALS exactly to enable permanent deletion.";
   return "";
 }

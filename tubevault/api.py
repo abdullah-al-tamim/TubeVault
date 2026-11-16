@@ -96,6 +96,7 @@ class PhoneStart(BaseModel):
 
 class CleanupInput(BaseModel):
     ids: list[str] = Field(min_length=1, max_length=2000)
+    use_saved_verification: bool = False
     confirmation: Literal["DELETE ORIGINALS"]
 
 
@@ -264,11 +265,15 @@ def create_app(config=default_config, db=None, services=None, background=True, d
 
     def snapshot():
         with db.session() as s:
+            started = set(s.scalars(select(Event.job_id).where(
+                Event.kind == "transition", Event.message.like("%→ UPLOADING:%")).distinct()))
+            started.update(s.scalars(select(UploadSession.job_id)))
+            linked = set(s.scalars(select(Event.job_id).where(Event.kind == "title_link")))
             jobs = []
             for job in s.scalars(select(Job).order_by(Job.created.desc()).limit(2000)):
                 item = rowdict(job)
                 identity = s.get(Identity, job.identity_id)
-                item.update(size=identity.size, sha256=identity.sha256,
+                item.update(upload_attempted=job.id in started or job.progress > 0, title_linked=job.id in linked, size=identity.size, sha256=identity.sha256,
                             path=s.get(Instance, job.instance_id).path, playlist=s.get(Mapping, job.mapping_id).title)
                 jobs.append(item)
             account = s.scalar(select(Account))
@@ -358,7 +363,7 @@ def create_app(config=default_config, db=None, services=None, background=True, d
         if request.client.host not in {"127.0.0.1", "::1"}:
             raise HTTPException(403, "Cleanup is available on this PC only")
         try:
-            return cleanup.delete(body.ids)
+            return cleanup.delete(body.ids, body.use_saved_verification)
         except ValueError as error:
             raise HTTPException(409, str(error)) from None
 

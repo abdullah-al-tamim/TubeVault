@@ -15,6 +15,9 @@ type QueueJob = {
   path?: string;
   error: string;
   claimed?: boolean;
+  upload_attempted?: boolean;
+  video_id?: string | null;
+  title_linked?: boolean;
   next_attempt?: number;
   control_requested?: string;
 };
@@ -46,6 +49,7 @@ export function QueuePanel({
     (j) =>
       j.state !== "COMPLETED" &&
       (filter === "all" ||
+        (filter === "attempted" && j.upload_attempted && !j.video_id && !removed.has(displayState(j))) || (filter === "unattempted" && j.upload_attempted === false && !j.video_id && !removed.has(displayState(j))) ||
         (filter === "queue"
           ? !removed.has(displayState(j))
           : displayState(j) === filter)),
@@ -126,7 +130,7 @@ export function QueuePanel({
             run(async () => {
               const result = await api("/queue/check-duplicates", "POST");
               setNotice(
-                `Checked ${result.checked} YouTube videos. Held ${result.held} queued videos with matching titles. Found ${result.duplicate_titles.length} repeated titles already on YouTube.`,
+                `Checked ${result.checked} YouTube videos. Linked ${result.linked} to existing videos. Held ${result.held} queued videos with matching titles. Found ${result.duplicate_titles.length} repeated titles already on YouTube.`,
               );
             })
           }
@@ -135,8 +139,7 @@ export function QueuePanel({
         </Button>
         <p>
           Before each new upload, TubeVault checks your channel for the same
-          title (ignoring capitalization and extra spaces). Matches are held for
-          review, not marked as archived. No videos are deleted.
+          title (ignoring capitalization and extra spaces). A single matching channel video goes into the playlist mapped to its local folder. Archive History shows it after playlist insertion succeeds. Conflicting matches stay in the queue.
         </p>
       </div>
       <div className="queue-tools">
@@ -238,6 +241,7 @@ export function QueuePanel({
           }}
         >
           <option value="queue">Current queue</option>
+          <option value="attempted">Upload previously attempted</option><option value="unattempted">No upload attempt recorded</option>
           <option value="PAUSED">Paused</option>
           <option value="DUPLICATE_TITLE">Matching YouTube title</option>
           <option value="SKIPPED">Skipped</option>
@@ -325,6 +329,7 @@ export function QueuePanel({
                         : j.state === "FAILED_RETRYABLE"
                           ? "Waiting to retry"
                           : j.state)}
+                  {j.title_linked ? <small>Already on YouTube · folder playlist pending</small> : j.upload_attempted === false && !j.video_id && <small>No upload attempt recorded</small>}
                   {j.error && <small>{j.error}</small>}
                   {!j.control_requested &&
                     (j.state === "UPLOAD_UNCERTAIN" ||
@@ -339,8 +344,8 @@ export function QueuePanel({
                     )}
                 </td>
                 <td>
-                  {percent(j.progress, j.size)}% · {bytes(j.progress)} /{" "}
-                  {bytes(j.size)}
+                  {j.title_linked ? "Existing YouTube video" : <>{percent(j.progress, j.size)}% · {bytes(j.progress)} /{" "}
+                  {bytes(j.size)}</>}
                 </td>
                 <td>
                   <div className="row-actions">

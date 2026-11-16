@@ -4,7 +4,7 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from .db import Account, Event, Identity, Instance, Job
+from .db import Account, Event, Identity, Instance, Job, Video
 from .scanner import digest
 from .youtube import APIError
 
@@ -23,7 +23,8 @@ class Cleanup:
                 .join(Identity, Job.identity_id == Identity.id)
                 .join(Account, Job.account_id == Account.id)
                 .where(Job.state == "COMPLETED", Job.video_id.is_not(None),
-                       Instance.identity_id == Job.identity_id)
+                       Instance.identity_id == Job.identity_id,
+                       ~select(Event.id).where(Event.kind == "title_link", Event.job_id == Job.id).exists())
                 .order_by(Job.created)
             ))
         candidates = {}
@@ -50,7 +51,7 @@ class Cleanup:
         return [{"id": instance.id, "path": instance.path, "size": identity.size,
                  "video_id": job.video_id} for job, instance, identity in self.candidates().values()]
 
-    def delete(self, ids):
+    def delete(self, ids, use_saved_verification=False):
         results = []
         with self.scanner.lock:
             with self.db.session() as session:
@@ -64,11 +65,18 @@ class Cleanup:
                     continue
                 job, instance, identity = entry
                 try:
-                    remote = self.youtube.video(job.video_id)
-                    if (remote["snippet"]["channelId"] != job.account_id
-                        or f"TubeVault job {job.id}" not in remote["snippet"].get("description", "").splitlines()
-                        or remote.get("status", {}).get("uploadStatus") != "processed"):
-                        raise ValueError("YouTube could not verify the processed archive")
+                    if use_saved_verification:
+                        with self.db.session() as session:
+                            record = session.get(Video, job.video_id)
+                            if not (record and record.processing == "succeeded"
+                                    and record.identity_id == identity.id and record.account_id == job.account_id):
+                                raise ValueError("No matching successful processing record")
+                    else:
+                        remote = self.youtube.video(job.video_id)
+                        if (remote["snippet"]["channelId"] != job.account_id
+                            or f"TubeVault job {job.id}" not in remote["snippet"].get("description", "").splitlines()
+                            or remote.get("status", {}).get("uploadStatus") != "processed"):
+                            raise ValueError("YouTube could not verify the processed archive")
                     path, before = self.inspect_source(instance)
                     if digest(path) != identity.sha256:
                         raise ValueError("Original contents changed")
@@ -83,7 +91,11 @@ class Cleanup:
                     with self.db.session() as session:
                         session.add(Event(kind="source_cleanup", job_id=job.id, message="User deleted verified local original"))
                     results.append({"id": instance_id, "ok": True})
-                except (APIError, KeyError):
+                except APIError as error:
+                    results.append({"id": instance_id, "ok": False, "reason": str(error),
+                                    "can_use_saved": (error.retryable or error.quota)
+                                    and error.reason != "Video_not_visible_yet"})
+                except KeyError:
                     results.append({"id": instance_id, "ok": False, "reason": "YouTube verification unavailable"})
                 except OSError:
                     results.append({"id": instance_id, "ok": False, "reason": "File unavailable or locked"})
