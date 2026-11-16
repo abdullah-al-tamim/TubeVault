@@ -66,3 +66,27 @@ def test_winget_links_after_desktop_start(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path))
     assert str(links) in transport.tool_path().split(transport.os.pathsep)
     assert Path(transport.shutil.which(tool.stem, path=transport.tool_path())) == tool
+
+def test_flat_output_and_legacy_history(tmp_path, monkeypatch):
+    legacy = tmp_path / ("1" * 32)
+    legacy.mkdir()
+    source = legacy / f"{VIDEO}.mkv"
+    source.write_bytes(b"existing")
+    receipt = dict(id=legacy.name, video_id=VIDEO, title="Trip: ঢাকা", state="Ready", path=str(source))
+    (legacy / "status.json").write_text(json.dumps(receipt))
+    service = Pulls(tmp_path)
+    output = tmp_path / "Trip_ ঢাকা_tubevault.mkv"
+    assert output.read_bytes() == b"existing"
+    assert not legacy.exists()
+    assert service.recent()[0]["path"] == str(output)
+
+    def download(folder, source_id, kind, height):
+        staged = folder / f"{source_id}.mkv"
+        staged.write_bytes(b"second")
+        return dict(path=str(staged), title=receipt["title"])
+    monkeypatch.setattr("tubevault.pulls.download", download)
+    record = service.finish(*service.prepare(LINK, "source", None))
+    assert Path(record["path"]) == tmp_path / "Trip_ ঢাকা (2)_tubevault.mkv"
+    assert Path(record["path"]).read_bytes() == b"second"
+    assert output.read_bytes() == b"existing"
+    assert len(Pulls(tmp_path).recent()) == 2

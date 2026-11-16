@@ -4,7 +4,7 @@ A local Windows video archive with a React dashboard, durable SQLite upload queu
 
 ## Run on Windows
 
-**Desktop app:** install `artifacts/TubeVault-Setup-0.3.10.exe`, then open TubeVault from the desktop or Start menu. The first-run guide walks through Google credentials, channel connection, folders and background startup. See [DESKTOP.md](DESKTOP.md) for installation and build instructions.
+**Desktop app:** install `artifacts/TubeVault-Setup-0.3.11.exe`, then open TubeVault from the desktop or Start menu. The first-run guide walks through Google credentials, channel connection, folders and background startup. See [DESKTOP.md](DESKTOP.md) for installation and build instructions.
 
 **Just want to see the UI?** Double-click `Start-Preview.cmd` for an isolated sample-data preview. See [PREVIEW.md](PREVIEW.md). A source checkout needs `npm ci` and `npm run build` in `frontend` first; the preview ZIP already includes that build.
 
@@ -58,4 +58,4 @@ For a local ChatGPT/Codex edit, provide the link and ask it to run the installed
 & "$env:LOCALAPPDATA\Programs\TubeVault\TubeVault-Pull.exe" "https://youtu.be/VIDEO_ID_HERE" --format mp4 --height 1080
 ```
 
-From a source checkout, use `.\.venv\Scripts\python.exe -m tubevault.pulls` with the same arguments. Omit the format and height for highest available. Use `--format audio` for native audio or `--format mp3` for MP3. Add `--output "D:\Edits\Kuakata\References"` to place the pull in its own subfolder there. A successful command exits with code 0. By default the installed desktop dashboard and command share `%USERPROFILE%\TubeVault\data\pulls`. The server uses its configured data directory. Custom output folders stay outside dashboard history. Each pull has a separate folder and a status receipt, including after failure. The dashboard lists the latest 100.
+From a source checkout, use `.\.venv\Scripts\python.exe -m tubevault.pulls` with the same arguments. Omit the format and height for highest available. Use `--format audio` for native audio or `--format mp3` for MP3. Add `--output "D:\Edits\Kuakata\References"` to save the media directly there. A successful command exits with code 0. By default the installed desktop dashboard and command share `%USERPROFILE%\TubeVault\data\pulls`. The server uses its configured data directory. Custom output folders stay outside dashboard history. Completed media sits directly in the output folder as <YouTube title>_tubevault.ext. Unsupported filename characters become underscores and duplicate titles receive a number before _tubevault. Receipts and staging files live under .tubevault. The app organizes completed downloads from older versions on first use. The dashboard lists the latest 100.

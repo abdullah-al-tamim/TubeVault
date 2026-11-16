@@ -30,14 +30,16 @@ def pull_routes(service):
 
     @router.get("/{key}/file")
     def file(key: UUID):
-        folder = service.root / key.hex
+        folder = service.jobs / key.hex
+        if not folder.is_dir():
+            folder = service.root / key.hex
         if not (folder / "status.json").is_file():
             raise HTTPException(404, "Pull not found.")
         record = service.get(folder)
         if record["state"] != "Ready":
             raise HTTPException(409, "Pull is not ready.")
         path = Path(record["path"]).resolve()
-        if path.parent != folder or not path.is_file():
+        if path.parent not in (service.root, service.root / key.hex) or not path.is_file():
             raise HTTPException(404, "The local file is missing.")
         return FileResponse(path, filename=path.name)
 
