@@ -1,5 +1,31 @@
 #if TUBEVAULT_CHECKS
 import SwiftUI
+final class MockGoogle: URLProtocol {
+    static var revoked = false
+    static var inserted = false
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func stopLoading() {}
+    override func startLoading() {
+        var status = 200
+        var result: [String:Any] = [:]
+        switch (request.url!.path,request.httpMethod) {
+        case ("/token",_):
+            if Self.revoked { status = 400 } else { result = ["access_token":"test-only","expires_in":3600] }
+        case ("/youtube/v3/channels",_), ("/youtube/v3/playlists",_):
+            result = ["items":[["id":"test","snippet":["title":"Fixture"]]]]
+        case ("/youtube/v3/playlistItems","GET"):
+            result = ["items":Self.inserted ? [["id":"membership"]] : []]
+        case ("/youtube/v3/playlistItems","POST"):
+            Self.inserted = true
+            result = ["id":"membership"]
+        default: status = 404
+        }
+        client?.urlProtocol(self,didReceive:HTTPURLResponse(url:request.url!,statusCode:status,httpVersion:nil,headerFields:nil)!,cacheStoragePolicy:.notAllowed)
+        client?.urlProtocol(self,didLoad:try! JSONSerialization.data(withJSONObject:result))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+}
 struct SimulatorChecks: View {
     @EnvironmentObject var m: Model
     var body: some View { Text("TubeVault simulator checks").task { await check() } }
@@ -34,6 +60,23 @@ struct SimulatorChecks: View {
             try require(persisted?.phase == .playlist && persisted?.videoID == "mockvideo01","Separate playlist intent")
             try require(try Data(contentsOf:source) == fixture,"Source preservation")
             try require(!FileManager.default.fileExists(atPath:try m.storage().media(job.id).path),"Staging cleanup")
+            let config = URLSessionConfiguration.ephemeral
+            config.protocolClasses = [MockGoogle.self]
+            let google = Google(transport:URLSession(configuration:config),client:"simulator")
+            let expired = try JSONEncoder().encode(Credentials(access:"expired",refresh:"simulated",expires:.distantPast))
+            try Vault.put("google",expired)
+            try require(try await google.token() == "test-only","Token refresh")
+            let connected = Model(auth:google)
+            await connected.account()
+            try require(connected.channel?.id == "test","Authenticated channel")
+            await connected.run(job.id)
+            try require(MockGoogle.inserted && connected.jobs.first?.phase == .done,"Playlist recovery without second upload")
+            try Vault.put("google",expired)
+            MockGoogle.revoked = true
+            var refused = false
+            do { _ = try await google.token() } catch { refused = true }
+            try require(refused,"Revoked credentials")
+            try Vault.remove("google")
             try "passed".write(to:documents.appendingPathComponent("checks.txt"),atomically:true,encoding:.utf8)
         } catch {
             try? ("failed: " + String(describing:error)).write(to:documents.appendingPathComponent("checks.txt"),atomically:true,encoding:.utf8)

@@ -23,19 +23,26 @@ struct Home: View {
     @EnvironmentObject var m: Model
     @State private var network = "Checking"
     private let monitor = NWPathMonitor()
+    private var accepted: [Job] { m.jobs.filter { $0.videoID != nil } }
+    private var staged: [Job] { m.jobs.filter { $0.videoID == nil } }
+    private var freeBytes: Int64? {
+        let attributes = try? FileManager.default.attributesOfFileSystem(forPath:NSHomeDirectory())
+        return (attributes?[.systemFreeSize] as? NSNumber)?.int64Value
+    }
+    private var visiblePhases: [Phase] { Phase.allCases.filter { phase in m.jobs.contains { $0.phase == phase } } }
     private var dashboard: some View {
             NavigationStack {
                 List {
                     Section("YouTube channel") { Text(m.channel?.title ?? "Connect Google in Settings") }
                     Section("Archive") {
-                        LabeledContent("Uploaded", value: String(m.jobs.filter { $0.videoID != nil }.count))
-                        LabeledContent("Uploaded bytes", value: bytes(m.jobs.filter { $0.videoID != nil }.reduce(0) { $0 + $1.bytes }))
-                        LabeledContent("Staged originals", value: bytes(m.jobs.filter { $0.videoID == nil }.reduce(0) { $0 + $1.bytes }))
-                        if let space = try? FileManager.default.attributesOfFileSystem(forPath:NSHomeDirectory())[.systemFreeSize] as? NSNumber { LabeledContent("Available storage", value:bytes(space.int64Value)) }
+                        LabeledContent("Uploaded", value: String(accepted.count))
+                        LabeledContent("Uploaded bytes", value: bytes(accepted.reduce(Int64(0)) { $0 + $1.bytes }))
+                        LabeledContent("Staged originals", value: bytes(staged.reduce(Int64(0)) { $0 + $1.bytes }))
+                        if let freeBytes { LabeledContent("Available storage", value:bytes(freeBytes)) }
                         LabeledContent("Network",value:network)
                     }
                     Section("Queue activity") {
-                        ForEach(Phase.allCases.filter { state in m.jobs.contains { $0.phase == state } },id:\.self) { state in LabeledContent(state.rawValue,value:String(m.jobs.filter { $0.phase == state }.count)) }
+                        ForEach(visiblePhases,id:\.self) { state in LabeledContent(state.rawValue,value:String(m.jobs.filter { $0.phase == state }.count)) }
                         if m.jobs.isEmpty { Text("Add a video from Photos or Files to get started.") }
                     }
                 }.navigationTitle("TubeVault")

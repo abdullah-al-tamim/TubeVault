@@ -44,7 +44,13 @@ struct Credentials: Codable {
 }
 @MainActor final class Google: NSObject, ASWebAuthenticationPresentationContextProviding {
     private var browser: ASWebAuthenticationSession?
-    private let client = Bundle.main.object(forInfoDictionaryKey: "GoogleClientID") as? String ?? ""
+    let transport: URLSession
+    private let client: String
+    init(transport: URLSession = .shared, client: String = Bundle.main.object(forInfoDictionaryKey: "GoogleClientID") as? String ?? "") {
+        self.transport = transport
+        self.client = client
+        super.init()
+    }
     private var refreshTask: Task<String, Error>?
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first ?? UIWindow()
@@ -83,7 +89,7 @@ struct Credentials: Codable {
         req.httpMethod = "POST"
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         req.httpBody = encode(fields.merging(["client_id": client]) { _, new in new })
-        let (data, res) = try await URLSession.shared.data(for: req)
+        let (data, res) = try await transport.data(for: req)
         guard (res as? HTTPURLResponse)?.statusCode == 200, let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let access = obj["access_token"] as? String, let ttl = obj["expires_in"] as? Double else { throw Problem("Google authorization expired or was refused. Reconnect in Settings.") }
         let refresh = obj["refresh_token"] as? String ?? previous
@@ -129,7 +135,7 @@ struct Destination: Identifiable, Hashable { let id: String; let title: String }
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
-        let (data, res) = try await URLSession.shared.data(for: req)
+        let (data, res) = try await auth.transport.data(for: req)
         let status = (res as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else { throw Self.failure(status, data: data) }
         return try JSONSerialization.jsonObject(with: data) as? [String:Any] ?? [:]

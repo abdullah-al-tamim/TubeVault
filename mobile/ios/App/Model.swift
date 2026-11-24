@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 
 @MainActor final class Model: ObservableObject {
     static let shared = Model()
-    let auth = Google()
+    let auth: Google
     var api: YouTube { YouTube(auth: auth) }
     let defaults = UserDefaults.standard
     @Published private(set) var jobs = [Job]()
@@ -36,7 +36,8 @@ import UniformTypeIdentifiers
             await run(id)
         }
     }
-    private init() {
+    init(auth: Google? = nil) {
+        self.auth = auth ?? Google()
         do {
             let db = try Storage()
             jobs = try db.load()
@@ -122,7 +123,7 @@ import UniformTypeIdentifiers
                 probe.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
                 probe.setValue("bytes */\(job.bytes)", forHTTPHeaderField: "Content-Range")
                 probe.setValue("0", forHTTPHeaderField: "Content-Length")
-                let (data, response) = try await URLSession.shared.data(for: probe)
+                let (data, response) = try await auth.transport.data(for: probe)
                 guard let http = response as? HTTPURLResponse else { throw Problem("No server response.") }
                 if http.statusCode != 308 { received(id, response: http, data: data, interrupted: false); return }
                 guard let offset = Rule.offset(http.value(forHTTPHeaderField:"Range"), total: job.bytes), offset < job.bytes else { throw Problem("No final video ID from YouTube. Check Studio and retry the status probe.") }
@@ -139,7 +140,7 @@ import UniformTypeIdentifiers
                 let title = String(job.filename.prefix(100))
                 req.httpBody = try JSONSerialization.data(withJSONObject:["snippet":["title": title, "description":"TubeVault job " + id.uuidString], "status":["privacyStatus":job.privacy]])
                 try edit(id) { $0.phase = .creating; $0.channel = channel.id; $0.lastAttempt = Date(); $0.detail = "" }
-                let (data,response) = try await URLSession.shared.data(for:req)
+                let (data,response) = try await auth.transport.data(for:req)
                 guard let http = response as? HTTPURLResponse else { throw Problem("No session receipt.") }
                 guard (200..<300).contains(http.statusCode) else {
                     if [400,401,403,413,415,429].contains(http.statusCode) { try edit(id) { $0.channel = ""; $0.phase = .failed } }
