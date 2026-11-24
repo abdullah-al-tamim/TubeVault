@@ -10,6 +10,12 @@ struct Problem: LocalizedError {
     var errorDescription: String? { message }
 }
 enum Vault {
+    #if TUBEVAULT_CHECKS && targetEnvironment(simulator)
+    private static var fixtures = [String:Data]()
+    static func read(_ key: String) throws -> Data? { fixtures[key] }
+    static func put(_ key: String, _ data: Data) throws { fixtures[key] = data }
+    static func remove(_ key: String) throws { fixtures[key] = nil }
+    #else
     static func query(_ key: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "TubeVault.iOS", kSecAttrAccount as String: key]
     }
@@ -36,6 +42,7 @@ enum Vault {
         let status = SecItemDelete(query(key) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw Problem("Unlock the phone and retry.") }
     }
+    #endif
 }
 struct Credentials: Codable {
     var access: String

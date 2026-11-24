@@ -10,16 +10,16 @@ mkdir -p "$out"
 cp build/Payload/TubeVault.app/Info.plist "$out/"
 /usr/libexec/PlistBuddy -c 'Set :CFBundleSupportedPlatforms:0 iPhoneSimulator' "$out/Info.plist"
 xcrun --sdk iphonesimulator swiftc -parse-as-library -swift-version 5 -D TUBEVAULT_CHECKS -target "$(uname -m)-apple-ios16.0-simulator" -sdk "$(xcrun --sdk iphonesimulator --show-sdk-path)" Core/*.swift App/*.swift -o "$out/TubeVault"
-cat > build/sim-entitlements.plist <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0"><dict><key>application-identifier</key><string>LOCALTEST.com.abdullahaltamim.tubevault</string><key>keychain-access-groups</key><array><string>LOCALTEST.com.abdullahaltamim.tubevault</string></array></dict></plist>
-PLIST
-codesign --force --sign - --entitlements build/sim-entitlements.plist "$out"
+codesign --force --sign - "$out"
 bundle=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$out/Info.plist")
 echo "Installing simulator build"
 xcrun simctl install "$device" "$out"
 echo "Launching queue checks"
-xcrun simctl launch "$device" "$bundle"
+for attempt in 1 2 3; do
+    if xcrun simctl launch "$device" "$bundle"; then break; fi
+    if [ "$attempt" = 3 ]; then exit 1; fi
+    sleep 5
+done
 echo "Checking persistent test result"
 result="$(xcrun simctl get_app_container "$device" "$bundle" data)/Documents/checks.txt"
 for i in {1..60}; do
