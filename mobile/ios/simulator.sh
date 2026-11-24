@@ -2,6 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 device=$(xcrun simctl list devices available -j | python3 -c 'import sys,json; print(next(d["udid"] for v in json.load(sys.stdin)["devices"].values() for d in v if d["name"].startswith("iPhone")))')
+echo "Booting the iPhone simulator"
 xcrun simctl boot "$device"
 xcrun simctl bootstatus "$device" -b
 out=build/simulator/TubeVault.app
@@ -15,8 +16,11 @@ cat > build/sim-entitlements.plist <<'PLIST'
 PLIST
 codesign --force --sign - --entitlements build/sim-entitlements.plist "$out"
 bundle=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$out/Info.plist")
+echo "Installing simulator build"
 xcrun simctl install "$device" "$out"
+echo "Launching queue checks"
 xcrun simctl launch "$device" "$bundle"
+echo "Checking persistent test result"
 result="$(xcrun simctl get_app_container "$device" "$bundle" data)/Documents/checks.txt"
 for i in {1..60}; do
     if test -f "$result"; then cat "$result"; grep -qx passed "$result"; exit; fi
