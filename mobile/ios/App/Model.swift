@@ -16,6 +16,26 @@ import UniformTypeIdentifiers
     @Published var busy = Set<UUID>()
     @Published var accountBusy = false
     private var database: Storage?
+    var concurrency: Int { max(1, min(4, defaults.integer(forKey:"concurrency"))) }
+    func recover(_ job: Job, video: String) async throws {
+        guard job.phase == .uncertain, Rule.safeID(video), let channel, channel.id == job.channel else { throw Problem("Enter a video ID and connect the original channel.") }
+        let result = try await api.request("videos",["part":"snippet,status","id":video])
+        guard let item = (result["items"] as? [[String:Any]])?.first,
+              let snippet = item["snippet"] as? [String:Any], snippet["channelId"] as? String == job.channel,
+              (snippet["description"] as? String)?.components(separatedBy:.newlines).contains("TubeVault job " + job.id.uuidString) == true else { throw Problem("Channel and upload marker must both match.") }
+        let receipt = try JSONSerialization.data(withJSONObject:["id":video])
+        received(job.id,response:HTTPURLResponse(url:URL(string:"https://www.googleapis.com")!,statusCode:200,httpVersion:nil,headerFields:nil),data:receipt,interrupted:false)
+    }
+    private func scheduleRetry(_ id: UUID) {
+        guard defaults.bool(forKey:"autoRetry"), let job = jobs.first(where:{ $0.id == id }), job.retries < 4 else { return }
+        do { try edit(id) { $0.retries += 1 } } catch { show(error); return }
+        let seconds = pow(2.0, Double(job.retries + 2)) + Double.random(in:0...3)
+        Task {
+            try? await Task.sleep(nanoseconds:UInt64(seconds * 1_000_000_000))
+            guard jobs.first(where:{ $0.id == id })?.phase == .paused else { return }
+            await run(id)
+        }
+    }
     private init() {
         do {
             let db = try Storage()
@@ -84,6 +104,11 @@ import UniformTypeIdentifiers
         do {
             guard let channel, job.channel.isEmpty || job.channel == channel.id else { throw Problem("Connect the original YouTube channel before continuing.") }
             if job.videoID != nil { try await associate(job); return }
+            guard jobs.filter({ $0.phase == .uploading || $0.phase == .creating || $0.phase == .probing }).count + busy.count - 1 < concurrency else { throw Problem("Transfer limit reached. Try again after another upload finishes.") }
+            if defaults.bool(forKey:"charging") {
+                UIDevice.current.isBatteryMonitoringEnabled = true
+                guard [.charging,.full].contains(UIDevice.current.batteryState) else { throw Problem("Connect power or turn off the charging preference.") }
+            }
             let file = try storage().media(id)
             guard FileManager.default.fileExists(atPath: file.path) else { throw Problem("Staged original is missing. Review the job before importing again.") }
             let token = try await auth.token()
@@ -177,6 +202,7 @@ import UniformTypeIdentifiers
                     else { j.phase = .paused; j.detail = interrupted ? "Transfer stopped. Resume to check confirmed bytes." : YouTube.failure(status,data:data).message }
                 }
             }
+            if !interrupted && (status == 429 || (500..<600).contains(status)) { scheduleRetry(id) }
         } catch { show(error) }
     }
     private func associate(_ job: Job) async throws {

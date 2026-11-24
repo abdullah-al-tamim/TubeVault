@@ -9,9 +9,13 @@ import Network
     @Environment(\.scenePhase) var phase
     var body: some Scene {
         WindowGroup {
+            #if TUBEVAULT_CHECKS
+            SimulatorChecks().environmentObject(model)
+            #else
             Home().environmentObject(model)
                 .task { await model.reconcile(); await model.account() }
                 .onChange(of: phase) { if $0 == .active { Task { await model.reconcile() } } }
+            #endif
         }
     }
 }
@@ -19,8 +23,7 @@ struct Home: View {
     @EnvironmentObject var m: Model
     @State private var network = "Checking"
     private let monitor = NWPathMonitor()
-    var body: some View {
-        TabView {
+    private var dashboard: some View {
             NavigationStack {
                 List {
                     Section("YouTube channel") { Text(m.channel?.title ?? "Connect Google in Settings") }
@@ -36,7 +39,11 @@ struct Home: View {
                         if m.jobs.isEmpty { Text("Add a video from Photos or Files to get started.") }
                     }
                 }.navigationTitle("TubeVault")
-            }.tabItem { Label("Dashboard",systemImage:"gauge") }
+            }
+    }
+    var body: some View {
+        TabView {
+            dashboard.tabItem { Label("Dashboard",systemImage:"gauge") }
             JobList(archive:false).tabItem { Label("Queue",systemImage:"list.bullet") }
             ImportView().tabItem { Label("Add Videos",systemImage:"plus.circle") }
             JobList(archive:true).tabItem { Label("Archive",systemImage:"archivebox") }
@@ -51,7 +58,10 @@ func bytes(_ value: Int64) -> String { ByteCountFormatter.string(fromByteCount:v
 struct JobList: View {
     let archive: Bool
     @EnvironmentObject var m: Model
-    @State private var search = "", filter = "All", sort = "Newest", playlist = ""
+    @State private var search = ""
+    @State private var filter = "All"
+    @State private var sort = "Newest"
+    @State private var playlist = ""
     @State private var selection = Set<UUID>()
     @State private var confirm = false
     var rows: [Job] {
@@ -89,6 +99,7 @@ struct JobList: View {
 }
 struct JobDetail: View {
     let id: UUID
+    @State private var recoveryID = ""
     @EnvironmentObject var m: Model
     var body: some View {
         List {
@@ -119,6 +130,12 @@ struct JobDetail: View {
                         try m.edit(id) { $0.detail = "Remote status: " + (status?["uploadStatus"] as? String ?? "unavailable") + " · " + (status?["privacyStatus"] as? String ?? "unknown visibility") }
                     } catch { m.show(error) } } }
                 }
+                if job.phase == .uncertain {
+                    Section("Recover from YouTube Studio") {
+                        TextField("YouTube video ID",text:$recoveryID).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        Button("Verify ownership and job marker") { Task { do { try await m.recover(job,video:recoveryID) } catch { m.show(error) } } }
+                    }
+                }
                 if job.phase == .uploading { Button("Pause transfer") { Task { await m.pause(id) } } }
                 if [.queued,.paused,.failed,.playlist].contains(job.phase) {
                     Button(job.phase == .playlist ? "Retry playlist association" : job.phase == .queued ? "Start upload" : "Resume or retry") { Task { await m.run(id) } }.disabled(m.busy.contains(id))
@@ -132,8 +149,10 @@ struct JobDetail: View {
 }
 struct ImportView: View {
     @EnvironmentObject var m: Model
-    @State private var files = false, loading = false
-    @State private var assets = [PHAsset](), selected = Set<String>()
+    @State private var files = false
+    @State private var loading = false
+    @State private var assets = [PHAsset]()
+    @State private var selected = Set<String>()
     @State private var progress = ""
     var body: some View {
         NavigationStack {
@@ -181,9 +200,17 @@ struct ImportView: View {
 struct SettingsView: View {
     @EnvironmentObject var m: Model
     @AppStorage("cellular") var cellular = false
+    @AppStorage("autoRetry") var autoRetry = false
+    @AppStorage("charging") var charging = false
+    @AppStorage("concurrency") var concurrency = 1
+    @AppStorage("stageGB") var stageGB = 20
     @AppStorage("privacy") var privacy = "private"
     @AppStorage("destination") var destination = ""
-    @State private var title = "", visibility = "private", creating = false
+    @State private var mapping = ""
+    @State private var mappedID = ""
+    @State private var title = ""
+    @State private var visibility = "private"
+    @State private var creating = false
     var body: some View {
         NavigationStack { Form {
             Section("Google and YouTube") {
@@ -193,8 +220,23 @@ struct SettingsView: View {
             }
             Section("Upload defaults") {
                 Toggle("Allow cellular transfers",isOn:$cellular)
+                Toggle("Start transfers only on power",isOn:$charging)
+                Toggle("Retry temporary server failures",isOn:$autoRetry)
+                Stepper("Concurrent uploads: \(concurrency)",value:$concurrency,in:1...4)
+                Stepper("Staging limit: \(stageGB) GB",value:$stageGB,in:1...250)
                 Picker("Video privacy",selection:$privacy) { Text("Private").tag("private"); Text("Unlisted").tag("unlisted") }
                 Picker("Playlist",selection:$destination) { Text("None").tag(""); ForEach(m.playlists) { Text($0.title).tag($0.id) } }
+            }
+            Section("Album or folder mapping") {
+                TextField("Photos album or Files folder name",text:$mapping)
+                Picker("Use playlist",selection:$mappedID) { Text("Use default").tag(""); ForEach(m.playlists) { Text($0.title).tag($0.id) } }
+                Button("Save mapping") {
+                    guard let channel = m.channel else { return }
+                    var rules = m.defaults.dictionary(forKey:"mapping." + channel.id) as? [String:String] ?? [:]
+                    rules[mapping] = mappedID.isEmpty ? nil : mappedID
+                    m.defaults.set(rules,forKey:"mapping." + channel.id)
+                    mapping = ""
+                }.disabled(mapping.isEmpty || m.channel == nil)
             }
             Section("Create playlist") {
                 TextField("Playlist name",text:$title)

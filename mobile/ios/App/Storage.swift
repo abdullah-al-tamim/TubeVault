@@ -49,11 +49,21 @@ final class Storage {
     }
 }
 extension Model {
+    func remainingStagingBytes() throws -> Int64 {
+        let root = try storage().root
+        let entries = try FileManager.default.contentsOfDirectory(at:root,includingPropertiesForKeys:[.fileSizeKey])
+        var used: Int64 = 0
+        for entry in entries { used += Int64(try entry.resourceValues(forKeys:[.fileSizeKey]).fileSize ?? 0) }
+        let gb = defaults.integer(forKey:"stageGB")
+        return Int64(gb == 0 ? 20 : gb) * 1_000_000_000 - used
+    }
     func importFile(_ url: URL) async throws {
         let id = UUID(), target = try storage().media(id)
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
         do {
+            let size = try url.resourceValues(forKeys:[.fileSizeKey]).fileSize ?? 0
+            guard Int64(size) <= (try remainingStagingBytes()) else { throw Problem("Staging limit reached. Raise it in Settings or finish queued uploads.") }
             try await Task.detached {
                 var coordinationError: NSError?, copyError: Error?
                 NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordinationError) { source in
@@ -62,7 +72,7 @@ extension Model {
                 if let error = coordinationError { throw error }
                 if let error = copyError { throw error }
             }.value
-            try await record(id, name: url.lastPathComponent, source: "Files/" + url.deletingLastPathComponent().lastPathComponent)
+            try await record(id, name: url.lastPathComponent, source: "Files/" + url.deletingLastPathComponent().lastPathComponent, collections:[url.deletingLastPathComponent().lastPathComponent])
         } catch { try? FileManager.default.removeItem(at: target); throw error }
     }
     func importAsset(_ asset: PHAsset) async throws {
@@ -78,14 +88,19 @@ extension Model {
                     if let error { c.resume(throwing: error) } else { c.resume() }
                 }
             }
-            try await record(id, name: resource.originalFilename, source: asset.localIdentifier)
+            let albums = PHAssetCollection.fetchAssetCollectionsContaining(asset, with:.album, options:nil)
+            let names = (0..<albums.count).compactMap { albums.object(at:$0).localizedTitle }.sorted()
+            try await record(id, name: resource.originalFilename, source: asset.localIdentifier, collections:names + ["Camera Roll"])
         } catch { try? FileManager.default.removeItem(at: target); throw error }
     }
-    private func record(_ id: UUID, name: String, source: String) async throws {
+    private func record(_ id: UUID, name: String, source: String, collections:[String]) async throws {
         let url = try storage().media(id)
         let (digest, bytes) = try await Task.detached { try Storage.digest(url) }.value
         guard !jobs.contains(where: { $0.digest == digest }) else { throw Problem("\(name) already has a queue or archive record.") }
-        var job = Job(filename: name, source: source, bytes: bytes, digest: digest, privacy: defaults.string(forKey:"privacy") == "unlisted" ? "unlisted" : "private", playlistID: defaults.string(forKey:"destination") ?? "")
+        guard try remainingStagingBytes() >= 0 else { throw Problem("Staging limit exceeded. Increase it in Settings.") }
+        let rules = defaults.dictionary(forKey:"mapping." + (channel?.id ?? "")) as? [String:String] ?? [:]
+        let mapped = collections.compactMap { rules[$0] }.first
+        var job = Job(filename: name, source: source, bytes: bytes, digest: digest, privacy: defaults.string(forKey:"privacy") == "unlisted" ? "unlisted" : "private", playlistID: mapped ?? defaults.string(forKey:"destination") ?? "")
         job.id = id
         try persist(jobs + [job])
     }

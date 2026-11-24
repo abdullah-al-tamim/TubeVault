@@ -63,6 +63,7 @@ struct Credentials: Codable {
         let redirect = scheme + ":/oauthredirect"
         var url = URLComponents(string: "https://accounts.google.com/o/oauth2/v2/auth")!
         url.queryItems = ["client_id": client, "scope": "https://www.googleapis.com/auth/youtube.force-ssl", "redirect_uri": redirect, "response_type": "code", "state": state, "code_challenge": challenge, "code_challenge_method": "S256", "prompt": "select_account consent"].map { URLQueryItem(name: $0.key, value: $0.value) }
+        defer { browser = nil }
         let callback: URL = try await withCheckedThrowingContinuation { continuation in
             let session = ASWebAuthenticationSession(url: url.url!, callbackURLScheme: scheme) { url, _ in
                 if let url { continuation.resume(returning: url) } else { continuation.resume(throwing: Problem("Sign-in cancelled or unavailable.")) }
