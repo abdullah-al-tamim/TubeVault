@@ -12,7 +12,19 @@ python .\configure_ipa.py .\TubeVault.ipa --client "YOUR_ID.apps.googleuserconte
 
 For a build already configured with your client, use TubeVault.ipa directly. An unconfigured build can open and stage local files, but connecting Google requires personalization.
 
-## Install AltStore Classic
+## Install on your iPhone 13 running iOS 27
+
+For this phone use **Sideloadly for Windows**. Its publisher explicitly lists iOS 27 support. It signs TubeVault as a standalone app with your free Apple account. The signing/launch sequence still needs verification on your phone.
+
+1. Download the 64-bit Windows installer from [Sideloadly](https://sideloadly.io/) and follow its Apple device driver prerequisites. Plug the unlocked iPhone into the PC, tap Trust, enter the phone passcode, and select your iPhone in Sideloadly.
+2. Drop **TubeVault-personal.ipa** onto the IPA field. Choose Apple ID sideload signing and keep the bundle identifier equal to your iOS OAuth registration. Use the same identifier for each update. Enter Apple account credentials and complete any two-factor prompt in the local installer.
+3. Click **Start**. When signing and installation finish, open Settings → General → VPN & Device Management on your iPhone and trust the developer account if prompted. Enable Settings → Privacy & Security → Developer Mode and confirm after restart.
+4. Launch TubeVault from the Home Screen, then Settings → Connect Google account. Check the channel ID before queuing a short private test video.
+5. Enable Sideloadly automatic refresh and keep the Windows refresh service reachable by the phone before each free seven-day profile expires. You can also reinstall the personalized IPA over the existing app. Keep the same account and bundle ID to preserve the queue.
+
+If Windows cannot see the phone, check USB pairing before troubleshooting signing. If iOS rejects the provisioning profile, record the exact iOS point version and installer error. If Google sign-in fails after successful launch, check the effective signed bundle identifier against your Google iOS credential.
+
+## Alternative installation with AltStore Classic
 
 1. Follow [AltStore's Windows setup](https://faq.altstore.io/altstore-classic/how-to-install-altstore-windows). Use the linked Apple versions of iTunes and iCloud, install AltServer for Windows, then start it. Allow its local-network firewall prompt for your private network.
 2. Connect the unlocked iPhone by USB, tap **Trust** on the phone, open iTunes, select the phone, enable **Sync with this iPhone over Wi-Fi** and click Apply.
@@ -26,7 +38,8 @@ For a build already configured with your client, use TubeVault.ipa directly. An 
 
 | Method | Role for this build |
 | --- | --- |
-| [AltStore Classic](https://github.com/altstoreio/AltStore) | Preferred. Windows-assisted personal signing and a standalone Home Screen app. |
+| [Sideloadly](https://sideloadly.io/) | Preferred for this iOS 27 phone. Direct Windows signing and refresh. |
+| [AltStore Classic](https://github.com/altstoreio/AltStore) | Alternative. Windows-assisted personal signing and a standalone Home Screen app. |
 | [SideStore](https://docs.sidestore.io/docs/installation/install.html) | Alternative standalone installation with different pairing and refresh requirements. Check its current version-specific instructions. |
 | [LiveContainer](https://github.com/LiveContainer/LiveContainer) | Hosts guest apps inside a container. TubeVault depends on its registered callback and background-session relaunch as a standalone app. Guest execution is outside this build's validation. |
 

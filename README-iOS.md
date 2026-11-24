@@ -1,6 +1,6 @@
 # TubeVault for iPhone
 
-Standalone SwiftUI app for iPhone 13 running iOS 16 or later. A Windows connection is needed for initial AltStore setup and subsequent signing refreshes. Direct Google uploads use the iPhone's own connection.
+Standalone SwiftUI app for iPhone 13 running iOS 16 or later. A Windows connection is needed for initial Sideloadly setup and subsequent signing refreshes. Direct Google uploads use the iPhone's own connection.
 
 1. [Install on Windows and iPhone](docs/ios-install-windows.md).
 2. [Create the Google iOS client](docs/ios-google-oauth.md).
