@@ -3,6 +3,7 @@ import Foundation
 enum Phase: String, Codable, CaseIterable {
     case queued = "Queued", creating = "Opening upload session", probing = "Checking server progress"
     case uploading = "Uploading", paused = "Paused", uncertain = "Needs reconciliation"
+    case cancelled = "Cancelled"
     case playlist = "Playlist pending", done = "Uploaded", failed = "Needs attention"
 }
 struct Job: Identifiable, Codable {
@@ -19,6 +20,7 @@ struct Job: Identifiable, Codable {
     var videoID: String?
     var detail = ""
     var created = Date()
+    var duration: Double?
     var completed: Date?
     var lastAttempt: Date?
     var retries = 0

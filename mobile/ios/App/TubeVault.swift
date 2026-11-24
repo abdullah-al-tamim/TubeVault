@@ -13,7 +13,7 @@ import Network
             SimulatorChecks().environmentObject(model)
             #else
             Home().environmentObject(model)
-                .task { await model.reconcile(); await model.account() }
+                .task { await model.reconcile(); if model.defaults.bool(forKey:"scanOnOpen") { await model.scanPhotos(request:false) }; await model.account() }
                 .onChange(of: phase) { if $0 == .active { Task { await model.reconcile() } } }
             #endif
         }
@@ -117,6 +117,14 @@ struct JobDetail: View {
                     LabeledContent("Size",value:bytes(job.bytes))
                     LabeledContent("Confirmed by YouTube",value:bytes(job.confirmed))
                     if let sent = m.sent[id] { LabeledContent("Sent this attempt",value:bytes(sent)) }
+                    if let speed = m.speeds[id], speed > 0 {
+                        LabeledContent("Current speed",value:bytes(Int64(speed)) + "/s")
+                        let remaining = max(0,job.bytes - job.confirmed - (m.sent[id] ?? 0))
+                        LabeledContent("Estimated remaining",value:String(Int(Double(remaining) / speed)) + " s")
+                    }
+                    if let duration = job.duration { LabeledContent("Duration",value:String(format:"%.1f s",duration)) }
+                    if let path = try? m.storage().media(id).appendingPathExtension("jpg").path,
+                       let image = UIImage(contentsOfFile:path) { Image(uiImage:image).resizable().scaledToFit().frame(maxHeight:120).accessibilityLabel("Video thumbnail") }
                     LabeledContent("Added",value:job.created.formatted())
                     if let date = job.completed { LabeledContent("Accepted",value:date.formatted()) }
                     Text("Source: " + job.source).textSelection(.enabled)
@@ -143,8 +151,8 @@ struct JobDetail: View {
                         Button("Verify ownership and job marker") { Task { do { try await m.recover(job,video:recoveryID) } catch { m.show(error) } } }
                     }
                 }
-                if job.phase == .uploading { Button("Pause transfer") { Task { await m.pause(id) } } }
-                if [.queued,.paused,.failed,.playlist].contains(job.phase) {
+                if job.phase == .uploading { Button("Pause transfer") { Task { await m.pause(id) } }; Button("Cancel transfer",role:.destructive) { Task { await m.pause(id,cancel:true) } } }
+                if [.queued,.paused,.failed,.playlist,.cancelled].contains(job.phase) {
                     Button(job.phase == .playlist ? "Retry playlist association" : job.phase == .queued ? "Start upload" : "Resume or retry") { Task { await m.run(id) } }.disabled(m.busy.contains(id))
                 }
             }
@@ -158,7 +166,7 @@ struct ImportView: View {
     @EnvironmentObject var m: Model
     @State private var files = false
     @State private var loading = false
-    @State private var assets = [PHAsset]()
+    private var assets: [PHAsset] { m.photoAssets }
     @State private var selected = Set<String>()
     @State private var progress = ""
     var body: some View {
@@ -166,12 +174,7 @@ struct ImportView: View {
             List {
                 Button("Choose videos from Files") { files = true }
                 Button("Scan permitted Photos videos") { Task {
-                    let status = await PHPhotoLibrary.requestAuthorization(for:.readWrite)
-                    guard [.authorized,.limited].contains(status) else { m.notice = "Allow Photos access in iPhone Settings."; return }
-                    let options = PHFetchOptions()
-                    options.sortDescriptors = [NSSortDescriptor(key:"creationDate",ascending:false)]
-                    let result = PHAsset.fetchAssets(with:.video,options:options)
-                    assets = (0..<result.count).map { result.object(at:$0) }
+                    await m.scanPhotos(request:true)
                 } }
                 if !assets.isEmpty { Section("Photos") {
                     ForEach(assets,id:\.localIdentifier) { asset in
@@ -206,6 +209,7 @@ struct ImportView: View {
 }
 struct SettingsView: View {
     @EnvironmentObject var m: Model
+    @AppStorage("scanOnOpen") var scanOnOpen = false
     @AppStorage("cellular") var cellular = false
     @AppStorage("autoRetry") var autoRetry = false
     @AppStorage("charging") var charging = false
@@ -226,6 +230,7 @@ struct SettingsView: View {
                 } else { Button("Connect Google account") { Task { await m.account(true) } }.disabled(m.accountBusy) }
             }
             Section("Upload defaults") {
+                Toggle("Scan permitted Photos on launch",isOn:$scanOnOpen)
                 Toggle("Allow cellular transfers",isOn:$cellular)
                 Toggle("Start transfers only on power",isOn:$charging)
                 Toggle("Retry temporary server failures",isOn:$autoRetry)

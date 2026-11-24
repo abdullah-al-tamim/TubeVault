@@ -1,6 +1,8 @@
 import Foundation
 import SQLite3
 import CryptoKit
+import AVFoundation
+import UIKit
 import Photos
 import UniformTypeIdentifiers
 
@@ -102,6 +104,20 @@ extension Model {
         let mapped = collections.compactMap { rules[$0] }.first
         var job = Job(filename: name, source: source, bytes: bytes, digest: digest, privacy: defaults.string(forKey:"privacy") == "unlisted" ? "unlisted" : "private", playlistID: mapped ?? defaults.string(forKey:"destination") ?? "")
         job.id = id
+        let asset = AVURLAsset(url:url)
+        if let seconds = try? await asset.load(.duration).seconds, seconds.isFinite { job.duration = seconds }
+        let preview = url.appendingPathExtension("jpg")
+        let frame = AVAssetImageGenerator(asset:asset)
+        frame.appliesPreferredTrackTransform = true
+        frame.maximumSize = CGSize(width:200,height:150)
+        if let result = try? await frame.image(at:.zero),
+           let image = UIImage(cgImage:result.image).jpegData(compressionQuality:0.75) {
+            try? image.write(to:preview,options:.atomic)
+        }
+        guard !jobs.contains(where: { $0.digest == digest }) else {
+            try? FileManager.default.removeItem(at:preview)
+            throw Problem("This video was just added to the queue.")
+        }
         try persist(jobs + [job])
     }
 }

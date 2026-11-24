@@ -1,6 +1,6 @@
 # iOS verification
 
-GitHub Actions runs swift test, compiles an arm64 device binary, checks the plist and IPA ZIP, then exercises a separate simulator build. The simulator harness imports a generated local file, detects duplicate bytes, reopens SQLite, simulates lost and known sessions, processes HTTP 308 and final acceptance, and checks that the source survives staging cleanup. The package tests cover invalid ranges, remote identifiers, subsequence search and Codable playlist recovery. No Apple credentials, personal footage or live uploads are used by CI.
+GitHub Actions runs swift test, compiles an arm64 device binary, checks the plist and IPA ZIP, then exercises a separate simulator build. The simulator harness imports a generated local file, detects duplicate bytes, reopens SQLite, simulates lost and known sessions, processes HTTP 308 and final acceptance, and checks that the source survives staging cleanup. Mock Google responses exercise access-token refresh, revoked credentials, channel display data and independent playlist recovery. The package tests cover invalid ranges, remote identifiers, subsequence search and Codable playlist recovery. No Apple credentials, personal footage or live uploads are used by CI.
 
 ## Pending device verification
 

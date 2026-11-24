@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import Photos
 import UniformTypeIdentifiers
 
 @MainActor final class Model: ObservableObject {
@@ -10,6 +11,33 @@ import UniformTypeIdentifiers
     @Published private(set) var jobs = [Job]()
     @Published var sent = [UUID:Int64]()
     @Published var notice = ""
+    private var samples = [UUID:(Date,Int64)]()
+    @Published var speeds = [UUID:Double]()
+    @Published var photoAssets = [PHAsset]()
+    func scanPhotos(request: Bool) async {
+        let status: PHAuthorizationStatus
+        if request { status = await PHPhotoLibrary.requestAuthorization(for:.readWrite) }
+        else { status = PHPhotoLibrary.authorizationStatus(for:.readWrite) }
+        guard status == .authorized || status == .limited else {
+            photoAssets = []
+            if request { notice = "Allow Photos access in iPhone Settings." }
+            return
+        }
+        let options = PHFetchOptions()
+        options.sortDescriptors = [NSSortDescriptor(key:"creationDate",ascending:false)]
+        let result = PHAsset.fetchAssets(with:.video,options:options)
+        photoAssets = (0..<result.count).map { result.object(at:$0) }
+    }
+    func progress(_ id: UUID, count: Int64) {
+        sent[id] = count
+        let now = Date()
+        if let (time,previous) = samples[id] {
+            let interval = now.timeIntervalSince(time)
+            guard interval >= 1 else { return }
+            if count > previous { speeds[id] = Double(count - previous) / interval }
+        }
+        samples[id] = (now,count)
+    }
     @Published var importStatus = ""
     @Published var channel: Destination?
     @Published var playlists = [Destination]()
@@ -105,7 +133,7 @@ import UniformTypeIdentifiers
         do {
             guard let channel, job.channel.isEmpty || job.channel == channel.id else { throw Problem("Connect the original YouTube channel before continuing.") }
             if job.videoID != nil { try await associate(job); return }
-            guard jobs.filter({ $0.phase == .uploading || $0.phase == .creating || $0.phase == .probing }).count + busy.count - 1 < concurrency else { throw Problem("Transfer limit reached. Try again after another upload finishes.") }
+            guard Set(jobs.filter({ $0.phase == .uploading || $0.phase == .creating || $0.phase == .probing }).map(\.id)).union(busy).subtracting([id]).count < concurrency else { throw Problem("Transfer limit reached. Try again after another upload finishes.") }
             if defaults.bool(forKey:"charging") {
                 UIDevice.current.isBatteryMonitoringEnabled = true
                 guard [.charging,.full].contains(UIDevice.current.batteryState) else { throw Problem("Connect power or turn off the charging preference.") }
@@ -187,6 +215,8 @@ import UniformTypeIdentifiers
     private func mime(_ job: Job) -> String { UTType(filenameExtension:(job.filename as NSString).pathExtension)?.preferredMIMEType ?? "application/octet-stream" }
     func received(_ id: UUID, response: HTTPURLResponse?, data: Data, interrupted: Bool) {
         sent[id] = nil
+        samples[id] = nil
+        speeds[id] = nil
         guard let job = jobs.first(where: { $0.id == id }), job.videoID == nil else { return }
         do {
             let status = response?.statusCode ?? 0
@@ -198,7 +228,8 @@ import UniformTypeIdentifiers
                 if !job.playlistID.isEmpty { Task { await Task.yield(); await run(id) } }
             } else {
                 try edit(id) { j in
-                    if status == 404 || status == 410 { j.phase = .uncertain; j.detail = "Session expired. Check YouTube Studio for the job marker." }
+                    if j.phase == .cancelled && interrupted { j.detail = "Cancelled. The saved session is retained for recovery." }
+                    else if status == 404 || status == 410 { j.phase = .uncertain; j.detail = "Session expired. Check YouTube Studio for the job marker." }
                     else if status == 308, let offset = Rule.offset(response?.value(forHTTPHeaderField:"Range"),total:j.bytes) { j.phase = .paused; j.confirmed = offset; j.detail = "Server confirmed partial receipt. Resume to send remaining bytes." }
                     else { j.phase = .paused; j.detail = interrupted ? "Transfer stopped. Resume to check confirmed bytes." : YouTube.failure(status,data:data).message }
                 }
@@ -214,7 +245,8 @@ import UniformTypeIdentifiers
         } else if found["items"] as? [[String:Any]] == nil { throw Problem("Unable to confirm playlist membership.") }
         try edit(job.id) { $0.phase = .done; $0.detail = "Playlist membership confirmed." }
     }
-    func pause(_ id: UUID) async {
+    func pause(_ id: UUID, cancel: Bool = false) async {
+        if cancel { do { try edit(id) { $0.phase = .cancelled } } catch { show(error); return } }
         let tasks = await Transfers.shared.session.allTasks
         for task in tasks where task.taskDescription == id.uuidString { task.cancel() }
     }
@@ -222,5 +254,6 @@ import UniformTypeIdentifiers
         guard !busy.contains(job.id), job.phase == .queued || job.phase == .done else { throw Problem("Only queued items or completed records can be removed.") }
         try persist(jobs.filter { $0.id != job.id })
         try? FileManager.default.removeItem(at: storage().media(job.id))
+        try? FileManager.default.removeItem(at: storage().media(job.id).appendingPathExtension("jpg"))
     }
 }

@@ -22,7 +22,7 @@ final class Transfers: NSObject, URLSessionDataDelegate, URLSessionTaskDelegate 
     }
     func urlSession(_ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64, totalBytesExpectedToSend: Int64) {
         guard let label = task.taskDescription, let id = UUID(uuidString: label) else { return }
-        MainActor.assumeIsolated { Model.shared.sent[id] = totalBytesSent }
+        MainActor.assumeIsolated { Model.shared.progress(id,count:totalBytesSent) }
     }
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
         let callback = finished
