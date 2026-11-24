@@ -25,7 +25,7 @@ test("pull an audio track after choosing a video cap", async ({ page }) => {
   await page.getByRole("button", { name: "Video Pull" }).click();
   await page.getByLabel("YouTube link").fill(url);
   await page.getByLabel("Maximum video height").selectOption("1080");
-  await page.getByLabel("Format", {exact: true}).selectOption("mp3");
+  await page.getByRole("combobox", {name: /^Format/i}).selectOption("mp3");
   await expect(page.getByLabel("Maximum video height")).toHaveCount(0);
   await page.getByRole("button", { name: "Pull media" }).click();
   await expect(page.getByRole("link", { name: "Download file" })).toHaveAttribute("href", "/api/pulls/pull/file");

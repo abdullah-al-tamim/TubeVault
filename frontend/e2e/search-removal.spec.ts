@@ -87,9 +87,8 @@ for (const archive of [true, false]) {
     if (await page.getByRole("button", { name: "Open navigation" }).isVisible())
       await page.getByRole("button", { name: "Open navigation" }).click();
     await page
-      .getByRole("button", {
-        name: archive ? "Archive History" : "Upload Queue",
-        exact: true,
+      .getByRole("navigation").getByRole("button", {
+        name: archive ? /^Archive History$/ : /^Upload Queue/,
       })
       .click();
     await page.getByText("Folders · All", { exact: true }).click();

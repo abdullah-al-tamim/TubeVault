@@ -4,7 +4,7 @@
 
 1. On the iPhone open Settings → General → About and check iOS Version. TubeVault targets iOS 16+. Verify the chosen installer's current support for that exact version.
 2. Open [PR 5](https://github.com/abdullah-al-tamim/TubeVault/pull/5), then Checks → TubeVault iOS → Details. Open the run summary and download **TubeVault-unsigned** under Artifacts while signed in to GitHub. Extract the downloaded ZIP once. Keep TubeVault.ipa intact.
-3. Follow [Google setup](ios-google-oauth.md) to obtain your public iOS client ID. Download [configure_ipa.py](../mobile/ios/configure_ipa.py) from the same branch and place it next to the IPA. In that folder open PowerShell and run the following, substituting your client ID and registered bundle ID. The helper creates a new file and refuses to overwrite an existing one.
+3. For Abdullah's iPhone build, the existing TubeVault Google project now has an iOS client for `com.abdullahaltamim.tubevault`. The build reads its public ID from the repository variable. Use the configured **TubeVault.ipa** directly in Sideloadly. For a different project or generic build, follow [Google setup](ios-google-oauth.md) to obtain your public iOS client ID. Download [configure_ipa.py](../mobile/ios/configure_ipa.py) from the same branch and place it next to the IPA. In that folder open PowerShell and run the following, substituting your client ID and registered bundle ID. The helper creates a new file and refuses to overwrite an existing one.
 
 ```powershell
 python .\configure_ipa.py .\TubeVault.ipa --client "YOUR_ID.apps.googleusercontent.com" --bundle "com.abdullahaltamim.tubevault"

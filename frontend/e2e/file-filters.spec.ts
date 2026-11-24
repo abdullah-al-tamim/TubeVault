@@ -68,7 +68,7 @@ test("originals checklists filter live and clear hidden selections", async ({
     .filter({ has: page.getByRole("heading", { name: "Free up space" }) });
   await panel.getByText("Folders · All", { exact: true }).click();
   await panel
-    .getByRole("checkbox", { name: /C:\/Trips\/Kuakata/ })
+    .getByRole("checkbox", { name: /^C:\/Trips\/Kuakata/ })
     .check();
   await expect(
     panel.getByText("2 of 3 files match", { exact: true }),
