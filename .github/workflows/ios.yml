@@ -1,0 +1,28 @@
+name: TubeVault iOS
+on:
+  pull_request:
+    paths: ['mobile/ios/**', '.github/workflows/ios.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: mobile/ios
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run protocol tests
+        run: swift test
+      - name: Build and package native application
+        env:
+          GOOGLE_IOS_CLIENT_ID: ${{ vars.GOOGLE_IOS_CLIENT_ID }}
+          IOS_BUNDLE_ID: ${{ vars.IOS_BUNDLE_ID }}
+        run: bash build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TubeVault-unsigned
+          path: mobile/ios/build/TubeVault.ipa
+          if-no-files-found: error
