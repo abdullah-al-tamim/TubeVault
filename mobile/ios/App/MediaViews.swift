@@ -132,7 +132,7 @@ struct BatchPicker: View {
                     } label: {
                         HStack {
                             Image(systemName:selected.contains(job.id) ? "checkmark.circle.fill" : "circle")
-                            VStack(alignment:.leading) { Text(job.filename); Text(job.privacy.capitalized + " · " + bytes(job.bytes)).font(.caption) }
+                            VStack(alignment:.leading) { Text(job.filename); Text(job.privacy.capitalized + " · " + (job.needsPhotoResource == true ? "In Photos" : bytes(job.bytes))).font(.caption) }
                         }
                     }
                 }
@@ -154,7 +154,7 @@ struct TransferRow: View {
             if job.phase == .uploading {
                 TransferProgress(job:job,meter:model.meter(job.id))
             } else if job.phase == .queued {
-                Text("Queued · \(bytes(job.bytes)) · \(job.privacy.capitalized)")
+                Text("Queued · \(job.needsPhotoResource == true ? "In Photos" : bytes(job.bytes)) · \(job.privacy.capitalized)")
                 Button("Start upload") { Task { await model.run(job.id) } }
                     .buttonStyle(.bordered).disabled(model.busy.contains(job.id) || model.channel == nil)
             } else {

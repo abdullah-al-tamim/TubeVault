@@ -152,6 +152,9 @@ import UniformTypeIdentifiers
     func reconcile() async {
         let tasks = await Transfers.shared.session.allTasks
         let active = Set(tasks.compactMap(\.taskDescription))
+        for job in jobs where job.phase == .preparing && !busy.contains(job.id) {
+            do { try edit(job.id) { $0.phase = .paused; $0.detail = "Preparation interrupted. Resume to continue." } } catch { show(error) }
+        }
         for job in jobs where [.creating,.probing,.uploading].contains(job.phase) && !active.contains(job.id.uuidString) && !busy.contains(job.id) {
             do {
                 let known = try sessionURL(job.id) != nil
@@ -162,7 +165,7 @@ import UniformTypeIdentifiers
     func run(_ id: UUID) async {
         guard !accountBusy, busy.insert(id).inserted else { return }
         defer { busy.remove(id); if !draining { Task { await drain() } } }
-        guard let job = jobs.first(where: { $0.id == id }), ![.done,.uncertain,.creating,.uploading,.probing].contains(job.phase) else { return }
+        guard var job = jobs.first(where: { $0.id == id }), ![.done,.uncertain,.creating,.uploading,.probing].contains(job.phase) else { return }
         do {
             guard let channel, job.channel.isEmpty || job.channel == channel.id else { throw Problem("Connect the original YouTube channel before continuing.") }
             if job.videoID != nil { try await associate(job); return }
@@ -170,6 +173,11 @@ import UniformTypeIdentifiers
             if defaults.bool(forKey:"charging") {
                 UIDevice.current.isBatteryMonitoringEnabled = true
                 guard [.charging,.full].contains(UIDevice.current.batteryState) else { throw Problem("Connect power or turn off the charging preference.") }
+            }
+            if job.needsPhotoResource == true {
+                try edit(id) { $0.phase = .preparing; $0.detail = "Reading original bytes from Photos." }
+                try await preparePhoto(job)
+                guard let prepared = jobs.first(where:{ $0.id == id }) else { throw Problem("Queue item missing.") }; job = prepared
             }
             let file = try storage().media(id)
             guard FileManager.default.fileExists(atPath: file.path) else { throw Problem("Staged original is missing. Review the job before importing again.") }

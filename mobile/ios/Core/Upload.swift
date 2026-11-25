@@ -1,6 +1,7 @@
 import Foundation
 
 enum Phase: String, Codable, CaseIterable {
+    case preparing = "Preparing original"
     case waiting = "Waiting for upload slot"
     case queued = "Queued", creating = "Opening upload session", probing = "Checking server progress"
     case uploading = "Uploading", paused = "Paused", uncertain = "Needs reconciliation"
@@ -15,6 +16,7 @@ struct Job: Identifiable, Codable, Equatable {
     var digest: String
     var privacy: String
     var playlistID: String
+    var needsPhotoResource: Bool?
     var batchOwner: String?
     var channel = ""
     var phase = Phase.queued

@@ -95,7 +95,7 @@ struct JobList: View {
                 ForEach(rows) { job in NavigationLink(value:job.id) {
                     VStack(alignment:.leading, spacing:5) {
                         Text(job.filename).lineLimit(2)
-                        Text(job.phase.rawValue + " · " + bytes(job.bytes)).font(.subheadline).foregroundStyle(.secondary)
+                        Text(job.phase.rawValue + " · " + (job.needsPhotoResource == true ? "In Photos" : bytes(job.bytes))).font(.subheadline).foregroundStyle(.secondary)
                         if job.phase == .uploading { TransferProgress(job:job,meter:m.meter(job.id)) }
                     }
                 }.tag(job.id) }
@@ -133,7 +133,7 @@ struct JobDetail: View {
                 Section(job.filename) {
                     Text(job.phase.rawValue).font(.headline)
                     if !job.detail.isEmpty { Text(job.detail) }
-                    LabeledContent("Size",value:bytes(job.bytes))
+                    LabeledContent("Size",value:job.needsPhotoResource == true ? "Measured when prepared" : bytes(job.bytes))
                     LabeledContent("Confirmed by YouTube",value:bytes(job.confirmed))
                     if job.phase == .uploading { TransferProgress(job:job,meter:m.meter(id)) }
                     if let duration = job.duration { LabeledContent("Duration",value:String(format:"%.1f s",duration)) }

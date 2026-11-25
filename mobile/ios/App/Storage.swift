@@ -76,7 +76,7 @@ final class Storage {
             let ext = url.pathExtension
             guard ["","jpg","part"].contains(ext), let id = UUID(uuidString:url.deletingPathExtension().lastPathComponent) else { continue }
             let job = live[id]
-            if job == nil || (ext != "jpg" && job?.videoID != nil) {
+            if job == nil || (ext != "jpg" && (job?.videoID != nil || job?.needsPhotoResource == true)) {
                 try? FileManager.default.removeItem(at:url)
             }
         }
@@ -125,21 +125,51 @@ extension Model {
     func importAsset(_ asset: PHAsset) async throws {
         guard !jobs.contains(where:{ $0.source == asset.localIdentifier }) else { throw Problem("This Photos original already has a queue or archive record.") }
         guard let resource = PHAssetResource.assetResources(for: asset).first(where: { $0.type == .video }) else { throw Problem("Original video is unavailable.") }
-        let id = UUID(), target = try storage().media(id)
+        let albums = PHAssetCollection.fetchAssetCollectionsContaining(asset,with:.album,options:nil)
+        let names = (0..<albums.count).compactMap { albums.object(at:$0).localizedTitle }.sorted() + ["Camera Roll"]
+        let rules = defaults.dictionary(forKey:"mapping." + (channel?.id ?? "")) as? [String:String] ?? [:]
+        var job = Job(filename:resource.originalFilename,source:asset.localIdentifier,bytes:0,digest:"",
+                      privacy:defaults.string(forKey:"privacy") == "unlisted" ? "unlisted" : "private",
+                      playlistID:names.compactMap { rules[$0] }.first ?? defaults.string(forKey:"destination") ?? "")
+        job.duration = asset.duration
+        job.needsPhotoResource = true
+        try persist(jobs + [job])
+    }
+    func preparePhoto(_ job:Job) async throws {
+        guard let asset = PHAsset.fetchAssets(withLocalIdentifiers:[job.source],options:nil).firstObject,
+              let resource = PHAssetResource.assetResources(for:asset).first(where:{ $0.type == .video }),
+              resource.originalFilename == job.filename else { throw Problem("Photos original unavailable. Restore access and retry.") }
+        let target = try storage().media(job.id)
+        let available = try remainingStagingBytes()
+        guard available > 0 else { throw Problem("Staging limit reached. Finish another transfer or raise the limit.") }
         let options = PHAssetResourceRequestOptions()
         options.isNetworkAccessAllowed = true
-        options.progressHandler = { value in Task { @MainActor in self.importStatus = "Retrieving original: \(Int(value * 100))%" } }
-        defer { importStatus = "" }
         do {
-            try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
-                PHAssetResourceManager.default().writeData(for: resource, toFile: target, options: options) { error in
-                    if let error { c.resume(throwing: error) } else { c.resume() }
+            let (digest,bytes) = try await Task.detached(priority:.utility) {
+                try Data().write(to:target)
+                let handle = try FileHandle(forWritingTo:target)
+                defer { try? handle.close() }
+                var hash = SHA256(), count: Int64 = 0
+                var failure: Error?
+                let lock = NSLock()
+                try await withCheckedThrowingContinuation { (c:CheckedContinuation<Void,Error>) in
+                    PHAssetResourceManager.default().requestData(for:resource,options:options,dataReceivedHandler:{ data in
+                        lock.lock(); defer { lock.unlock() }
+                        guard failure == nil else { return }
+                        guard Int64(data.count) <= available - count else { failure = Problem("Video exceeds available staging budget."); return }
+                        do { try handle.write(contentsOf:data); hash.update(data:data); count += Int64(data.count) } catch { failure = error }
+                    },completionHandler:{ error in
+                        lock.lock(); let result = failure ?? error; lock.unlock()
+                        if let result { c.resume(throwing:result) } else { c.resume() }
+                    })
                 }
-            }
-            let albums = PHAssetCollection.fetchAssetCollectionsContaining(asset, with:.album, options:nil)
-            let names = (0..<albums.count).compactMap { albums.object(at:$0).localizedTitle }.sorted()
-            try await record(id, name: resource.originalFilename, source: asset.localIdentifier, collections:names + ["Camera Roll"])
-        } catch { try? FileManager.default.removeItem(at: target); throw error }
+                guard count > 0 else { throw Problem("Original video is empty.") }
+                return (hash.finalize().map { String(format:"%02x",$0) }.joined(),count)
+            }.value
+            guard !jobs.contains(where:{ $0.id != job.id && $0.digest == digest }) else { throw Problem("Identical content already exists in the queue or archive.") }
+            guard try remainingStagingBytes() >= 0 else { throw Problem("Staging limit reached. Retry after another upload finishes.") }
+            try edit(job.id) { $0.digest = digest; $0.bytes = bytes; $0.needsPhotoResource = false }
+        } catch { try? FileManager.default.removeItem(at:target); throw error }
     }
     private func record(_ id: UUID, name: String, source: String, collections:[String]) async throws {
         let url = try storage().media(id)
