@@ -11,7 +11,7 @@ if client and not re.fullmatch(r"[a-zA-Z0-9-]+\.apps\.googleusercontent\.com", c
     raise ValueError("Invalid iOS OAuth client ID")
 bundle = os.environ.get("IOS_BUNDLE_ID") or "com.abdullahaltamim.tubevault"
 info = dict(CFBundleExecutable="TubeVault", CFBundleName="TubeVault", CFBundleDisplayName="TubeVault",
-    CFBundleIdentifier=bundle, CFBundleVersion="1", CFBundleShortVersionString="0.1.0", CFBundlePackageType="APPL",
+    CFBundleIdentifier=bundle, CFBundleVersion="2", CFBundleShortVersionString="0.2.0", CFBundlePackageType="APPL",
     CFBundleInfoDictionaryVersion="6.0", LSRequiresIPhoneOS=True, UIDeviceFamily=[1], MinimumOSVersion="16.0",
     CFBundleSupportedPlatforms=["iPhoneOS"], UILaunchScreen={}, UISupportedInterfaceOrientations=["UIInterfaceOrientationPortrait"],
     NSPhotoLibraryUsageDescription="Select original videos to stage in your private upload queue.",

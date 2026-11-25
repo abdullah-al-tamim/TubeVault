@@ -21,6 +21,7 @@ import Network
 }
 struct Home: View {
     @EnvironmentObject var m: Model
+    @State private var pickTransfers = false
     @State private var network = "Checking"
     private let monitor = NWPathMonitor()
     private var accepted: [Job] { m.jobs.filter { $0.videoID != nil } }
@@ -36,6 +37,7 @@ struct Home: View {
                     Section("YouTube channel") { Text(m.channel?.title ?? "Connect Google in Settings") }
                     if !staged.isEmpty {
                         Section("Transfers") {
+                            if staged.contains(where:{ $0.phase == .queued }) { Button("Select uploads…") { pickTransfers = true } }
                             ForEach(staged.filter { $0.phase == .uploading } + staged.filter { $0.phase != .uploading }) { job in
                                 TransferRow(job:job)
                             }
@@ -53,6 +55,7 @@ struct Home: View {
                         if m.jobs.isEmpty { Text("Add a video from Photos or Files to get started.") }
                     }
                 }.navigationTitle("TubeVault")
+                .sheet(isPresented:$pickTransfers) { BatchPicker() }
                 .navigationDestination(for:UUID.self) { JobDetail(id:$0) }
             }
     }
@@ -92,7 +95,7 @@ struct JobList: View {
                     VStack(alignment:.leading, spacing:5) {
                         Text(job.filename).lineLimit(2)
                         Text(job.phase.rawValue + " · " + bytes(job.bytes)).font(.subheadline).foregroundStyle(.secondary)
-                        if job.phase == .uploading, let sent = m.sent[job.id] { ProgressView(value:Double(min(job.bytes,job.confirmed + sent)),total:Double(job.bytes)) }
+                        if job.phase == .uploading { TransferProgress(job:job,meter:m.meter(job.id)) }
                     }
                 }.tag(job.id) }
             }.navigationTitle(archive ? "Archive" : "Queue").searchable(text:$search,prompt:"Search by filename")
@@ -105,6 +108,7 @@ struct JobList: View {
                     Picker("Sort",selection:$sort) { ForEach(["Newest","Size","State"],id:\.self) { Text($0) } }
                     if !archive { Button("Retry failed items") { Task { for job in m.jobs where job.phase == .failed { await m.run(job.id) } } } }
                 } label: { Label("Filter and sort",systemImage:"line.3.horizontal.decrease.circle") }
+                if !archive && !selection.isEmpty { Button("Start selected") { m.startSelected(selection); selection.removeAll() }.disabled(m.channel == nil || !rows.contains(where:{ selection.contains($0.id) && $0.phase == .queued })) }
                 if !selection.isEmpty { Button("Remove",role:.destructive) { confirm = true } }
             }.confirmationDialog("Remove selected local records and staged copies?",isPresented:$confirm) {
                 Button("Remove eligible records",role:.destructive) { do { for job in m.jobs where selection.contains(job.id) { try m.forget(job) }; selection.removeAll() } catch { m.show(error) } }
@@ -124,12 +128,7 @@ struct JobDetail: View {
                     if !job.detail.isEmpty { Text(job.detail) }
                     LabeledContent("Size",value:bytes(job.bytes))
                     LabeledContent("Confirmed by YouTube",value:bytes(job.confirmed))
-                    if let sent = m.sent[id] { LabeledContent("Sent this attempt",value:bytes(sent)) }
-                    if let speed = m.speeds[id], speed > 0 {
-                        LabeledContent("Current speed",value:bytes(Int64(speed)) + "/s")
-                        let remaining = max(0,job.bytes - job.confirmed - (m.sent[id] ?? 0))
-                        LabeledContent("Estimated remaining",value:String(Int(Double(remaining) / speed)) + " s")
-                    }
+                    if job.phase == .uploading { TransferProgress(job:job,meter:m.meter(id)) }
                     if let duration = job.duration { LabeledContent("Duration",value:String(format:"%.1f s",duration)) }
                     if let path = try? m.storage().media(id).appendingPathExtension("jpg").path,
                        let image = UIImage(contentsOfFile:path) { Image(uiImage:image).resizable().scaledToFit().frame(maxHeight:120).accessibilityLabel("Video thumbnail") }

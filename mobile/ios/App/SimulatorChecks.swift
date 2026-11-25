@@ -71,6 +71,15 @@ struct SimulatorChecks: View {
             try require(connected.channel?.id == "test","Authenticated channel")
             await connected.run(job.id)
             try require(MockGoogle.inserted && connected.jobs.first?.phase == .done,"Playlist recovery without second upload")
+            var selected = Job(filename:"batch.mov",source:"fixture",bytes:10,digest:"batch",privacy:"private",playlistID:"")
+            let untouched = Job(filename:"other.mov",source:"fixture",bytes:11,digest:"other",privacy:"private",playlistID:"")
+            try connected.persist(connected.jobs + [selected,untouched])
+            connected.startSelected([selected.id])
+            let waiting = try Storage().load()
+            try require(waiting.first(where:{ $0.id == selected.id })?.batchOwner == "test","Durable batch owner")
+            try require(waiting.first(where:{ $0.id == untouched.id })?.phase == .queued,"Unselected upload stays queued")
+            try connected.forget(untouched)
+            try require(try Storage().load().allSatisfy { $0.id != untouched.id },"Per-row removal")
             try Vault.put("google",expired)
             MockGoogle.revoked = true
             var refused = false

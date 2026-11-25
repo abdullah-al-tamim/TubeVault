@@ -1,12 +1,13 @@
 import Foundation
 
 enum Phase: String, Codable, CaseIterable {
+    case waiting = "Waiting for upload slot"
     case queued = "Queued", creating = "Opening upload session", probing = "Checking server progress"
     case uploading = "Uploading", paused = "Paused", uncertain = "Needs reconciliation"
     case cancelled = "Cancelled"
     case playlist = "Playlist pending", done = "Uploaded", failed = "Needs attention"
 }
-struct Job: Identifiable, Codable {
+struct Job: Identifiable, Codable, Equatable {
     var id = UUID()
     var filename: String
     var source: String
@@ -14,6 +15,7 @@ struct Job: Identifiable, Codable {
     var digest: String
     var privacy: String
     var playlistID: String
+    var batchOwner: String?
     var channel = ""
     var phase = Phase.queued
     var confirmed: Int64 = 0

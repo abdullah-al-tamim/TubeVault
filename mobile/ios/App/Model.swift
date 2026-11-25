@@ -9,10 +9,16 @@ import UniformTypeIdentifiers
     var api: YouTube { YouTube(auth: auth) }
     let defaults = UserDefaults.standard
     @Published private(set) var jobs = [Job]()
-    @Published var sent = [UUID:Int64]()
+    private var meters = [UUID:TransferMeter]()
+    func meter(_ id:UUID) -> TransferMeter {
+        if let existing = meters[id] { return existing }
+        let meter = TransferMeter()
+        meters[id] = meter
+        return meter
+    }
     @Published var notice = ""
     private var samples = [UUID:(Date,Int64)]()
-    @Published var speeds = [UUID:Double]()
+
     @Published var photoAssets = [PHAsset]()
     func scanPhotos(request: Bool) async {
         let status: PHAuthorizationStatus
@@ -29,13 +35,14 @@ import UniformTypeIdentifiers
         photoAssets = (0..<result.count).map { result.object(at:$0) }
     }
     func progress(_ id: UUID, count: Int64) {
-        sent[id] = count
         let now = Date()
+        var speed: Double?
         if let (time,previous) = samples[id] {
             let interval = now.timeIntervalSince(time)
             guard interval >= 1 else { return }
-            if count > previous { speeds[id] = Double(count - previous) / interval }
+            if count > previous { speed = Double(count - previous) / interval }
         }
+        meter(id).reading = (count,speed)
         samples[id] = (now,count)
     }
     @Published var importStatus = ""
@@ -45,6 +52,30 @@ import UniformTypeIdentifiers
     @Published var accountBusy = false
     private var database: Storage?
     var concurrency: Int { max(1, min(4, defaults.integer(forKey:"concurrency"))) }
+    private var draining = false
+    func startSelected(_ selection: Set<UUID>) {
+        guard let channel, !accountBusy else { return }
+        do {
+            var next = jobs
+            for i in next.indices where selection.contains(next[i].id) && next[i].phase == .queued {
+                next[i].phase = .waiting
+                next[i].batchOwner = channel.id
+            }
+            try persist(next)
+            Task { await drain() }
+        } catch { show(error) }
+    }
+    func drain() async {
+        guard !draining, !accountBusy, let owner = channel?.id else { return }
+        draining = true
+        defer { draining = false }
+        while channel?.id == owner, !accountBusy {
+            let active = jobs.filter { [.creating,.probing,.uploading].contains($0.phase) }
+            guard Set(active.map(\.id)).union(busy).count < concurrency,
+                  let next = jobs.first(where:{ $0.phase == .waiting && $0.batchOwner == owner && !busy.contains($0.id) }) else { break }
+            await run(next.id)
+        }
+    }
     func recover(_ job: Job, video: String) async throws {
         guard job.phase == .uncertain, Rule.safeID(video), let channel, channel.id == job.channel else { throw Problem("Enter a video ID and connect the original channel.") }
         let result = try await api.request("videos",["part":"snippet,status","id":video])
@@ -70,24 +101,26 @@ import UniformTypeIdentifiers
             let db = try Storage()
             jobs = try db.load()
             database = db
+            try db.cleanAbandonedCopies(jobs:jobs)
         } catch { notice = "Queue could not be opened. Reopen after unlocking or freeing storage." }
     }
     func storage() throws -> Storage {
         guard let database else { throw Problem("Local queue unavailable. Reopen TubeVault.") }
         return database
     }
-    func persist(_ value: [Job]) throws { try storage().save(value); jobs = value }
+    func persist(_ value: [Job]) throws { try storage().save(value, replacing:jobs); jobs = value }
     func edit(_ id: UUID, _ change: (inout Job) -> Void) throws {
-        var next = jobs
-        guard let i = next.firstIndex(where: { $0.id == id }) else { throw Problem("Queue item missing.") }
-        change(&next[i])
-        try persist(next)
+        guard let i = jobs.firstIndex(where: { $0.id == id }) else { throw Problem("Queue item missing.") }
+        var job = jobs[i]
+        change(&job)
+        try storage().write(job, position:i)
+        jobs[i] = job
     }
     func show(_ error: Error) { notice = (error as? Problem)?.message ?? "Operation interrupted. Check connectivity, available storage and permissions, then retry." }
     func account(_ login: Bool = false) async {
         guard !accountBusy, busy.isEmpty else { return }
         accountBusy = true
-        defer { accountBusy = false }
+        defer { accountBusy = false; Task { await drain() } }
         do {
             if login { try await auth.signIn() }
             if try Vault.read("google") == nil { return }
@@ -128,7 +161,7 @@ import UniformTypeIdentifiers
     }
     func run(_ id: UUID) async {
         guard !accountBusy, busy.insert(id).inserted else { return }
-        defer { busy.remove(id) }
+        defer { busy.remove(id); if !draining { Task { await drain() } } }
         guard let job = jobs.first(where: { $0.id == id }), ![.done,.uncertain,.creating,.uploading,.probing].contains(job.phase) else { return }
         do {
             guard let channel, job.channel.isEmpty || job.channel == channel.id else { throw Problem("Connect the original YouTube channel before continuing.") }
@@ -180,7 +213,10 @@ import UniformTypeIdentifiers
             }
             let offset = jobs.first(where: { $0.id == id })!.confirmed
             var body = file
+            var end = job.bytes
             if offset > 0 {
+                end = offset + min(job.bytes - offset, 16 * 1024 * 1024)
+                let length = end - offset
                 body = try storage().tail(id)
                 let target = body
                 try await Task.detached {
@@ -190,7 +226,12 @@ import UniformTypeIdentifiers
                     try Data().write(to:target)
                     let output = try FileHandle(forWritingTo:target)
                     defer { try? output.close() }
-                    while let block = try input.read(upToCount:1024 * 1024), !block.isEmpty { try output.write(contentsOf:block) }
+                    var left = length
+                    while left > 0 {
+                        guard let block = try input.read(upToCount:Int(min(left,1024 * 1024))), !block.isEmpty else { throw Problem("Staged video is incomplete.") }
+                        try output.write(contentsOf:block)
+                        left -= Int64(block.count)
+                    }
                 }.value
             }
             var req = URLRequest(url:url)
@@ -198,7 +239,7 @@ import UniformTypeIdentifiers
             req.allowsCellularAccess = defaults.bool(forKey:"cellular")
             req.setValue("Bearer " + token, forHTTPHeaderField:"Authorization")
             req.setValue(mime(job), forHTTPHeaderField:"Content-Type")
-            req.setValue("bytes \(offset)-\(job.bytes-1)/\(job.bytes)", forHTTPHeaderField:"Content-Range")
+            req.setValue("bytes \(offset)-\(end-1)/\(job.bytes)", forHTTPHeaderField:"Content-Range")
             try edit(id) { $0.phase = .uploading; $0.detail = "File handed to iOS. Network scheduling can delay transmission." }
             let task = Transfers.shared.session.uploadTask(with:req,fromFile:body)
             task.taskDescription = id.uuidString
@@ -214,9 +255,10 @@ import UniformTypeIdentifiers
     }
     private func mime(_ job: Job) -> String { UTType(filenameExtension:(job.filename as NSString).pathExtension)?.preferredMIMEType ?? "application/octet-stream" }
     func received(_ id: UUID, response: HTTPURLResponse?, data: Data, interrupted: Bool) {
-        sent[id] = nil
+        defer { Task { await drain() } }
+        meters.removeValue(forKey:id)?.reading = nil
         samples[id] = nil
-        speeds[id] = nil
+
         guard let job = jobs.first(where: { $0.id == id }), job.videoID == nil else { return }
         do {
             let status = response?.statusCode ?? 0
@@ -233,6 +275,10 @@ import UniformTypeIdentifiers
                     else if status == 308, let offset = Rule.offset(response?.value(forHTTPHeaderField:"Range"),total:j.bytes) { j.phase = .paused; j.confirmed = offset; j.detail = "Server confirmed partial receipt. Resume to send remaining bytes." }
                     else { j.phase = .paused; j.detail = interrupted ? "Transfer stopped. Resume to check confirmed bytes." : YouTube.failure(status,data:data).message }
                 }
+            }
+            if !interrupted, status == 308, job.phase == .uploading, let offset = Rule.offset(response?.value(forHTTPHeaderField:"Range"),total:job.bytes), offset > job.confirmed, offset < job.bytes {
+                try? FileManager.default.removeItem(at: storage().tail(id))
+                Task { if jobs.first(where:{ $0.id == id })?.phase == .paused { await run(id) } }
             }
             if !interrupted && (status == 429 || (500..<600).contains(status)) { scheduleRetry(id) }
         } catch { show(error) }
