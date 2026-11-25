@@ -161,6 +161,10 @@ struct JobDetail: View {
                         try m.edit(id) { $0.detail = "Remote status: " + (status?["uploadStatus"] as? String ?? "unavailable") + " · " + (status?["privacyStatus"] as? String ?? "unknown visibility") }
                     } catch { m.show(error) } } }
                 }
+                if job.phase == .duplicate {
+                    Button("Upload anyway") { do { try m.approveDuplicate(job); m.startSelected([id]) } catch { m.show(error) } }
+                    Button("Skip duplicate") { do { try m.forget(job) } catch { m.show(error) } }
+                }
                 if job.phase == .uncertain {
                     Section("Recover from YouTube Studio") {
                         TextField("YouTube video ID",text:$recoveryID).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -187,9 +191,35 @@ struct ImportView: View {
     private var assets: [PHAsset] { m.photoAssets }
     @State private var selected = Set<String>()
     @State private var progress = ""
+    @State private var matches = Set<String>()
+    @State private var review = false
+    private func badge(_ asset: PHAsset) -> String? {
+        let name = PHAssetResource.assetResources(for:asset).first(where:{ $0.type == .video })?.originalFilename ?? ""
+        return m.match(filename:name,source:asset.localIdentifier)
+    }
+    private func enqueue(skip: Bool) {
+        let reviewed = matches
+        let owner = m.scannedOwner
+        loading = true
+        Task {
+            defer { loading = false }
+            for asset in assets where selected.contains(asset.localIdentifier) {
+                let id = asset.localIdentifier
+                if skip && reviewed.contains(id) { selected.remove(id); continue }
+                do {
+                    try await m.importAsset(asset,approveFor:reviewed.contains(id) ? owner : nil)
+                    selected.remove(id)
+                } catch { m.show(error) }
+            }
+        }
+    }
     var body: some View {
         NavigationStack {
             List {
+                Section("Duplicate check") {
+                    Text(m.accountBusy ? "Checking channel…" : m.scannedOwner != nil ? "Channel titles checked" : "Channel titles unchecked")
+                    Button("Refresh channel check") { Task { await m.account() } }.disabled(m.accountBusy)
+                }
                 Button("Choose videos from Files") { files = true }
                 Button("Scan permitted Photos videos") { Task {
                     await m.scanPhotos(request:true)
@@ -197,7 +227,7 @@ struct ImportView: View {
                 if !assets.isEmpty { Section("Photos") {
                     LazyVGrid(columns:[GridItem(.adaptive(minimum:125), spacing:8)],spacing:8) {
                         ForEach(assets,id:\.localIdentifier) { asset in
-                            MovieTile(asset:asset, selected:selected.contains(asset.localIdentifier),
+                            MovieTile(asset:asset, badge:badge(asset), selected:selected.contains(asset.localIdentifier),
                                       preview:{ preview = PreviewAsset(asset:asset) },
                                       select:{ if !selected.insert(asset.localIdentifier).inserted { selected.remove(asset.localIdentifier) } })
                         }
@@ -206,14 +236,15 @@ struct ImportView: View {
             }.disabled(loading).navigationTitle("Add Videos")
             .safeAreaInset(edge:.bottom) {
                 if loading { Text(m.importStatus.isEmpty ? progress : m.importStatus).padding() }
-                else if !selected.isEmpty { Button("Queue \(selected.count) selected") { Task {
-                    loading = true
-                    defer { loading = false }
-                    for asset in assets where selected.contains(asset.localIdentifier) {
-                        progress = "Staging original"
-                        do { try await m.importAsset(asset); selected.remove(asset.localIdentifier) } catch { m.show(error) }
-                    }
-                } }.buttonStyle(.borderedProminent).padding() }
+                else if !selected.isEmpty { Button("Queue \(selected.count) selected") {
+                    matches = Set(assets.filter { selected.contains($0.localIdentifier) && badge($0) != nil }.map(\.localIdentifier))
+                    if matches.isEmpty { enqueue(skip:false) } else { review = true }
+                }.buttonStyle(.borderedProminent).padding() }
+            }
+            .confirmationDialog("\(matches.count) possible duplicates selected",isPresented:$review) {
+                Button("Skip matches and queue the rest") { enqueue(skip:true) }
+                Button("Queue duplicates anyway") { enqueue(skip:false) }
+                Button("Cancel",role:.cancel) {}
             }
             .sheet(item:$preview) { MoviePreview(asset:$0.asset) }
             .fileImporter(isPresented:$files,allowedContentTypes:[.movie,.video],allowsMultipleSelection:true) { result in

@@ -47,6 +47,44 @@ import UniformTypeIdentifiers
     }
     @Published var importStatus = ""
     @Published var channel: Destination?
+    @Published var scannedOwner: String?
+    private var uploadedTitles = Set<String>()
+    func match(filename: String, source: String, digest: String = "", id: UUID? = nil) -> String? {
+        let key = Rule.titleKey(filename)
+        if let owner = channel?.id, scannedOwner == owner,
+           uploadedTitles.contains(key) || uploadedTitles.contains(Rule.titleKey(String(filename.prefix(100)))) { return "YouTube title match" }
+        var earlier = true
+        for other in jobs {
+            if other.id == id { earlier = false; continue }
+            guard Rule.titleKey(other.filename) == key || (!digest.isEmpty && other.digest == digest) ||
+                  (!source.hasPrefix("Files/") && source == other.source) else { continue }
+            if other.videoID != nil {
+                if other.channel == channel?.id { return "Already uploaded" }
+            } else if earlier || !other.channel.isEmpty {
+                return "Queue match"
+            }
+        }
+        return nil
+    }
+    func holdIfMatched(_ job: inout Job) {
+        guard job.channel.isEmpty, job.videoID == nil, job.duplicateApprovedFor == nil || job.duplicateApprovedFor != channel?.id,
+              let reason = match(filename:job.filename,source:job.source,digest:job.digest,id:job.id) else { return }
+        job.phase = .duplicate
+        job.detail = reason + ". Skip this copy or approve another upload."
+    }
+    private func checkBeforeStart(_ job: Job) throws -> Bool {
+        guard job.channel.isEmpty else { return true }
+        guard scannedOwner != nil, scannedOwner == channel?.id else { throw Problem("Refresh the channel check in Add Videos before starting a new upload.") }
+        var next = job
+        holdIfMatched(&next)
+        guard next.phase == .duplicate else { return true }
+        try edit(job.id) { $0 = next }
+        return false
+    }
+    func approveDuplicate(_ job: Job) throws {
+        guard let owner = channel?.id, owner == scannedOwner, job.phase == .duplicate else { throw Problem("Refresh the channel check before approving.") }
+        try edit(job.id) { $0.duplicateApprovedFor = owner; $0.phase = .queued; $0.detail = "" }
+    }
     @Published var playlists = [Destination]()
     @Published var busy = Set<UUID>()
     @Published var accountBusy = false
@@ -119,6 +157,7 @@ import UniformTypeIdentifiers
     func show(_ error: Error) { notice = (error as? Problem)?.message ?? "Operation interrupted. Check connectivity, available storage and permissions, then retry." }
     func account(_ login: Bool = false) async {
         guard !accountBusy, busy.isEmpty else { return }
+        scannedOwner = nil
         accountBusy = true
         defer { accountBusy = false; Task { await drain() } }
         do {
@@ -132,11 +171,21 @@ import UniformTypeIdentifiers
             }
             channel = current
             playlists = try await api.list("playlists")
+            do {
+                uploadedTitles = try await api.uploadTitles(channel:current.id)
+                scannedOwner = current.id
+                var next = jobs
+                for i in next.indices where [.queued,.waiting,.failed,.paused].contains(next[i].phase) {
+                    holdIfMatched(&next[i])
+                }
+                if next != jobs { try persist(next) }
+            } catch { scannedOwner = nil; show(error) }
         } catch { channel = nil; playlists = []; show(error) }
     }
     func logout() throws {
         guard !accountBusy, busy.isEmpty, !jobs.contains(where: { $0.phase == .uploading || $0.phase == .creating || $0.phase == .probing }) else { throw Problem("Pause active transfers before switching accounts.") }
         try Vault.remove("google")
+        scannedOwner = nil
         channel = nil
         playlists = []
         defaults.removeObject(forKey:"destination")
@@ -165,7 +214,7 @@ import UniformTypeIdentifiers
     func run(_ id: UUID) async {
         guard !accountBusy, busy.insert(id).inserted else { return }
         defer { busy.remove(id); if !draining { Task { await drain() } } }
-        guard var job = jobs.first(where: { $0.id == id }), ![.done,.uncertain,.creating,.uploading,.probing].contains(job.phase) else { return }
+        guard var job = jobs.first(where: { $0.id == id }), ![.duplicate,.done,.uncertain,.creating,.uploading,.probing].contains(job.phase) else { return }
         do {
             guard let channel, job.channel.isEmpty || job.channel == channel.id else { throw Problem("Connect the original YouTube channel before continuing.") }
             if job.videoID != nil { try await associate(job); return }
@@ -174,6 +223,7 @@ import UniformTypeIdentifiers
                 UIDevice.current.isBatteryMonitoringEnabled = true
                 guard [.charging,.full].contains(UIDevice.current.batteryState) else { throw Problem("Connect power or turn off the charging preference.") }
             }
+            guard try checkBeforeStart(job) else { return }
             if job.needsPhotoResource == true {
                 try edit(id) { $0.phase = .preparing; $0.detail = "Reading original bytes from Photos." }
                 try await preparePhoto(job)
@@ -199,6 +249,7 @@ import UniformTypeIdentifiers
                 try edit(id) { $0.confirmed = offset }
             } else {
                 guard job.channel.isEmpty else { try edit(id) { $0.phase = .uncertain }; return }
+                guard try checkBeforeStart(job) else { return }
                 var req = URLRequest(url: URL(string:"https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status")!)
                 req.httpMethod = "POST"
                 req.allowsCellularAccess = defaults.bool(forKey:"cellular")
@@ -308,7 +359,7 @@ import UniformTypeIdentifiers
         for task in tasks where task.taskDescription == id.uuidString { task.cancel() }
     }
     func forget(_ job: Job) throws {
-        guard !busy.contains(job.id), job.phase == .queued || job.phase == .done else { throw Problem("Only queued items or completed records can be removed.") }
+        guard !busy.contains(job.id), job.phase == .queued || job.phase == .done || (job.phase == .duplicate && job.channel.isEmpty && job.videoID == nil) else { throw Problem("Only queued items or completed records can be removed.") }
         try persist(jobs.filter { $0.id != job.id })
         try? FileManager.default.removeItem(at: storage().media(job.id))
         try? FileManager.default.removeItem(at: storage().media(job.id).appendingPathExtension("jpg"))

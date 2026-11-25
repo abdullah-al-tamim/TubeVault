@@ -122,8 +122,7 @@ extension Model {
             try await record(id, name: url.lastPathComponent, source: "Files/" + url.deletingLastPathComponent().lastPathComponent, collections:[url.deletingLastPathComponent().lastPathComponent])
         } catch { try? FileManager.default.removeItem(at: target); throw error }
     }
-    func importAsset(_ asset: PHAsset) async throws {
-        guard !jobs.contains(where:{ $0.source == asset.localIdentifier }) else { throw Problem("This Photos original already has a queue or archive record.") }
+    func importAsset(_ asset: PHAsset, approveFor owner: String? = nil) async throws {
         guard let resource = PHAssetResource.assetResources(for: asset).first(where: { $0.type == .video }) else { throw Problem("Original video is unavailable.") }
         let albums = PHAssetCollection.fetchAssetCollectionsContaining(asset,with:.album,options:nil)
         let names = (0..<albums.count).compactMap { albums.object(at:$0).localizedTitle }.sorted() + ["Camera Roll"]
@@ -131,6 +130,8 @@ extension Model {
         var job = Job(filename:resource.originalFilename,source:asset.localIdentifier,bytes:0,digest:"",
                       privacy:defaults.string(forKey:"privacy") == "unlisted" ? "unlisted" : "private",
                       playlistID:names.compactMap { rules[$0] }.first ?? defaults.string(forKey:"destination") ?? "")
+        job.duplicateApprovedFor = owner
+        holdIfMatched(&job)
         job.duration = asset.duration
         job.needsPhotoResource = true
         try persist(jobs + [job])
@@ -166,7 +167,6 @@ extension Model {
                 guard count > 0 else { throw Problem("Original video is empty.") }
                 return (hash.finalize().map { String(format:"%02x",$0) }.joined(),count)
             }.value
-            guard !jobs.contains(where:{ $0.id != job.id && $0.digest == digest }) else { throw Problem("Identical content already exists in the queue or archive.") }
             guard try remainingStagingBytes() >= 0 else { throw Problem("Staging limit reached. Retry after another upload finishes.") }
             try edit(job.id) { $0.digest = digest; $0.bytes = bytes; $0.needsPhotoResource = false }
         } catch { try? FileManager.default.removeItem(at:target); throw error }
@@ -174,7 +174,6 @@ extension Model {
     private func record(_ id: UUID, name: String, source: String, collections:[String]) async throws {
         let url = try storage().media(id)
         let (digest, bytes) = try await Task.detached { try Storage.digest(url) }.value
-        guard !jobs.contains(where: { $0.digest == digest }) else { throw Problem("\(name) already has a queue or archive record.") }
         guard try remainingStagingBytes() >= 0 else { throw Problem("Staging limit exceeded. Increase it in Settings.") }
         let rules = defaults.dictionary(forKey:"mapping." + (channel?.id ?? "")) as? [String:String] ?? [:]
         let mapped = collections.compactMap { rules[$0] }.first
@@ -190,10 +189,7 @@ extension Model {
            let image = UIImage(cgImage:result.image).jpegData(compressionQuality:0.75) {
             try? image.write(to:preview,options:.atomic)
         }
-        guard !jobs.contains(where: { $0.digest == digest }) else {
-            try? FileManager.default.removeItem(at:preview)
-            throw Problem("This video was just added to the queue.")
-        }
+        holdIfMatched(&job)
         try persist(jobs + [job])
     }
 }

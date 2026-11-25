@@ -147,6 +147,28 @@ struct Destination: Identifiable, Hashable { let id: String; let title: String }
         guard (200..<300).contains(status) else { throw Self.failure(status, data: data) }
         return try JSONSerialization.jsonObject(with: data) as? [String:Any] ?? [:]
     }
+    func uploadTitles(channel: String) async throws -> Set<String> {
+        let response = try await request("channels",["id":channel,"part":"contentDetails"])
+        guard let item = (response["items"] as? [[String:Any]])?.first,
+              let details = item["contentDetails"] as? [String:Any],
+              let related = details["relatedPlaylists"] as? [String:String],
+              let uploads = related["uploads"] else { throw Problem("Channel uploads unavailable.") }
+        var titles = Set<String>(), tokens = Set<String>()
+        var page: String?
+        repeat {
+            var query = ["playlistId":uploads,"part":"snippet","maxResults":"50"]
+            query["pageToken"] = page
+            let result = try await request("playlistItems",query)
+            guard let items = result["items"] as? [[String:Any]] else { throw Problem("Channel scan incomplete.") }
+            for item in items {
+                guard let snippet = item["snippet"] as? [String:Any], let title = snippet["title"] as? String else { throw Problem("Missing upload title.") }
+                titles.insert(Rule.titleKey(title))
+            }
+            page = result["nextPageToken"] as? String
+            if let page, !tokens.insert(page).inserted { throw Problem("Channel scan incomplete.") }
+        } while page != nil
+        return titles
+    }
     func list(_ resource: String) async throws -> [Destination] {
         var result: [Destination] = [], page: String?
         repeat {

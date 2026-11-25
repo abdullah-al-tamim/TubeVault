@@ -1,6 +1,7 @@
 import Foundation
 
 enum Phase: String, Codable, CaseIterable {
+    case duplicate = "Duplicate review"
     case preparing = "Preparing original"
     case waiting = "Waiting for upload slot"
     case queued = "Queued", creating = "Opening upload session", probing = "Checking server progress"
@@ -17,6 +18,7 @@ struct Job: Identifiable, Codable, Equatable {
     var privacy: String
     var playlistID: String
     var needsPhotoResource: Bool?
+    var duplicateApprovedFor: String?
     var batchOwner: String?
     var channel = ""
     var phase = Phase.queued
@@ -31,6 +33,11 @@ struct Job: Identifiable, Codable, Equatable {
     var retries = 0
 }
 enum Rule {
+    static func titleKey(_ title: String) -> String {
+        let name = title.trimmingCharacters(in:.whitespacesAndNewlines).precomposedStringWithCanonicalMapping.lowercased()
+        let path = name as NSString
+        return ["mp4","mov","m4v","avi","mkv","mts","m2ts","webm","3gp"].contains(path.pathExtension) ? path.deletingPathExtension : name
+    }
     static func offset(_ range: String?, total: Int64) -> Int64? {
         guard let range else { return 0 }
         guard range.hasPrefix("bytes=0-"), let end = Int64(range.dropFirst(8)), end >= 0, end < total else { return nil }

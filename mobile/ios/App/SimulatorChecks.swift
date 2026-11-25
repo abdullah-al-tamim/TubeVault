@@ -15,10 +15,14 @@ final class MockGoogle: URLProtocol {
         case ("/token",_):
             if Self.revoked { status = 400 } else { result = ["access_token":"test-only","expires_in":3600] }
         case ("/youtube/v3/channels",_), ("/youtube/v3/playlists",_):
-            result = ["items":[["id":"test","snippet":["title":"Fixture"]]]]
+            result = ["items":[["id":"test","snippet":["title":"Fixture"],"contentDetails":["relatedPlaylists":["uploads":"uploads"]]]]]
         case ("/youtube/v3/videos","GET"):
             result = ["items":[["id":"mockvideo01","snippet":["channelId":"test"],"status":["uploadStatus":Self.processed ? "processed" : "uploaded"]]]]
         case ("/youtube/v3/playlistItems","GET"):
+            if request.url!.query?.contains("playlistId=uploads") == true {
+                result = request.url!.query!.contains("pageToken=two") ? ["items":[["snippet":["title":"Remote Clip"]]]] : ["items":[],"nextPageToken":"two"]
+                break
+            }
             result = ["items":Self.inserted ? [["id":"membership"]] : []]
         case ("/youtube/v3/playlistItems","POST"):
             Self.inserted = true
@@ -43,8 +47,9 @@ struct SimulatorChecks: View {
             try await m.importFile(source)
             guard let job = m.jobs.first else { throw Problem("Queue import failed") }
             try require(job.bytes == 2_000_000 && job.privacy == "private" && job.phase == .queued,"Import metadata")
-            do { try await m.importFile(source); throw Problem("Duplicate accepted") }
-            catch let problem as Problem where problem.message.contains("already has") {}
+            try await m.importFile(source)
+            guard let held = m.jobs.last, held.phase == .duplicate else { throw Problem("Unreviewed duplicate escaped") }
+            try m.forget(held)
             // Simulate an upgrade from the original single-snapshot schema using only this test app's database.
             var oldDB: OpaquePointer?
             let dbPath = try m.storage().root.appendingPathComponent("queue.sqlite").path
@@ -82,6 +87,15 @@ struct SimulatorChecks: View {
             let connected = Model(auth:google)
             await connected.account()
             try require(connected.channel?.id == "test","Authenticated channel")
+            try require(connected.match(filename:"REMOTE CLIP.mov",source:"asset") == "YouTube title match","Paginated title check")
+            var duplicate = Job(filename:"Remote Clip.MOV",source:"asset",bytes:0,digest:"",privacy:"private",playlistID:"")
+            try connected.persist(connected.jobs + [duplicate])
+            await connected.run(duplicate.id)
+            duplicate = connected.jobs.last!
+            try require(duplicate.phase == .duplicate && duplicate.channel.isEmpty,"Hold before staging or creating session")
+            try connected.approveDuplicate(duplicate)
+            try require(connected.jobs.last?.duplicateApprovedFor == "test","Channel-specific approval")
+            try connected.forget(connected.jobs.last!)
             await connected.run(job.id)
             try require(MockGoogle.inserted && connected.jobs.first?.phase == .done,"Playlist recovery without second upload")
             let archived = connected.jobs[0]

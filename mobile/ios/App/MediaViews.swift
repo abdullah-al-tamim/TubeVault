@@ -9,6 +9,7 @@ struct PreviewAsset: Identifiable {
 
 struct MovieTile: View {
     let asset: PHAsset
+    let badge: String?
     let selected: Bool
     let preview: () -> Void
     let select: () -> Void
@@ -39,6 +40,10 @@ struct MovieTile: View {
                     .font(.title2).foregroundStyle(.white).background(selected ? Color.accentColor : Color.black.opacity(0.55),in:Circle())
                     .frame(width:44,height:44)
             }.buttonStyle(.plain).accessibilityLabel(selected ? "Deselect video" : "Select video")
+        }
+        .overlay(alignment:.topLeading) {
+            if let badge { Text(badge).font(.caption2.bold()).foregroundStyle(.black)
+                .padding(4).background(.yellow,in:Capsule()).allowsHitTesting(false) }
         }
         .onAppear {
             let token = UUID()
