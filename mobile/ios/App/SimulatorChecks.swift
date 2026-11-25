@@ -1,5 +1,6 @@
 #if TUBEVAULT_CHECKS
 import SwiftUI
+import SQLite3
 final class MockGoogle: URLProtocol {
     static var revoked = false
     static var inserted = false
@@ -44,6 +45,15 @@ struct SimulatorChecks: View {
             try require(job.bytes == 2_000_000 && job.privacy == "private" && job.phase == .queued,"Import metadata")
             do { try await m.importFile(source); throw Problem("Duplicate accepted") }
             catch let problem as Problem where problem.message.contains("already has") {}
+            // Simulate an upgrade from the original single-snapshot schema using only this test app's database.
+            var oldDB: OpaquePointer?
+            let dbPath = try m.storage().root.appendingPathComponent("queue.sqlite").path
+            try require(sqlite3_open(dbPath,&oldDB) == SQLITE_OK,"Open test database")
+            let legacyJSON = String(decoding:try JSONEncoder().encode([job]),as:UTF8.self).replacingOccurrences(of:"'",with:"''")
+            let seed = "BEGIN; DELETE FROM jobs; INSERT OR REPLACE INTO queue VALUES(1,'\(legacyJSON)'); COMMIT;"
+            let seeded = sqlite3_exec(oldDB,seed,nil,nil,nil)
+            sqlite3_close(oldDB)
+            try require(seeded == SQLITE_OK,"Seed legacy archive")
             let restored = try Storage().load()
             try require(restored.first?.id == job.id && restored.count == 1,"Persistent deduplication")
             try m.edit(job.id) { $0.phase = .creating; $0.channel = "test" }
