@@ -8,7 +8,38 @@ import UniformTypeIdentifiers
     let auth: Google
     var api: YouTube { YouTube(auth: auth) }
     let defaults = UserDefaults.standard
-    @Published private(set) var jobs = [Job]()
+    @Published private(set) var jobs = [Job]() { didSet { pickerIndexValid = false } }
+    private var pickerIndexValid = false
+    private var pickerChannel: String?
+    private var pickerNames = [String:String]()
+    private var pickerSources = [String:String]()
+    private var photoNames = [String:String]()
+    func pickerBadge(_ asset: PHAsset) -> String? {
+        let id = asset.localIdentifier
+        if !pickerIndexValid || pickerChannel != channel?.id {
+            pickerNames.removeAll(keepingCapacity:true)
+            pickerSources.removeAll(keepingCapacity:true)
+            for job in jobs where job.videoID == nil || job.channel == channel?.id {
+                let key = Rule.titleKey(job.filename)
+                let label = job.videoID == nil ? "Queue match" : "Already uploaded"
+                if job.videoID != nil || pickerNames[key] == nil { pickerNames[key] = label }
+                if job.videoID != nil || pickerSources[job.source] == nil { pickerSources[job.source] = label }
+            }
+            pickerChannel = channel?.id
+            pickerIndexValid = true
+        }
+        if let known = pickerSources[id] { return known }
+        let filename: String
+        if let cached = photoNames[id] { filename = cached }
+        else {
+            guard let resource = PHAssetResource.assetResources(for:asset).first(where:{ $0.type == .video }) else { return nil }
+            filename = resource.originalFilename
+            photoNames[id] = filename
+        }
+        let key = Rule.titleKey(filename)
+        if scannedOwner != nil, scannedOwner == channel?.id, uploadedTitles.contains(key) || uploadedTitles.contains(Rule.titleKey(String(filename.prefix(100)))) { return "YouTube title match" }
+        return pickerNames[key]
+    }
     private var meters = [UUID:TransferMeter]()
     func meter(_ id:UUID) -> TransferMeter {
         if let existing = meters[id] { return existing }

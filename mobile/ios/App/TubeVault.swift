@@ -111,6 +111,22 @@ struct JobList: View {
                 } label: { Label("Filter and sort",systemImage:"line.3.horizontal.decrease.circle") }
                 if !archive && !selection.isEmpty { Button("Start selected") { m.startSelected(selection); selection.removeAll() }.disabled(m.channel == nil || !rows.contains(where:{ selection.contains($0.id) && $0.phase == .queued })) }
                 if !selection.isEmpty { Menu("Actions") {
+                    if !archive && rows.contains(where:{ selection.contains($0.id) && $0.phase == .duplicate }) {
+                        Button("Upload selected duplicates anyway") {
+                            do {
+                                let held = rows.filter { selection.contains($0.id) && $0.phase == .duplicate }
+                                for job in held { try m.approveDuplicate(job) }
+                                m.startSelected(Set(held.map(\.id)))
+                                selection.removeAll()
+                            } catch { m.show(error) }
+                        }.disabled(m.scannedOwner == nil || m.accountBusy)
+                        Button("Skip selected duplicates") {
+                            do {
+                                for job in rows where selection.contains(job.id) && job.phase == .duplicate { try m.forget(job) }
+                                selection.removeAll()
+                            } catch { m.show(error) }
+                        }
+                    }
                     if archive { Button("Delete from iPhone…",role:.destructive) {
                         cleanup = CleanupSelection(jobs:rows.filter { selection.contains($0.id) })
                     }.disabled(rows.filter { selection.contains($0.id) }.contains { $0.originalDeleted != nil }) }
@@ -193,10 +209,6 @@ struct ImportView: View {
     @State private var progress = ""
     @State private var matches = Set<String>()
     @State private var review = false
-    private func badge(_ asset: PHAsset) -> String? {
-        let name = PHAssetResource.assetResources(for:asset).first(where:{ $0.type == .video })?.originalFilename ?? ""
-        return m.match(filename:name,source:asset.localIdentifier)
-    }
     private func enqueue(skip: Bool) {
         let reviewed = matches
         let owner = m.scannedOwner
@@ -227,7 +239,7 @@ struct ImportView: View {
                 if !assets.isEmpty { Section("Photos") {
                     LazyVGrid(columns:[GridItem(.adaptive(minimum:125), spacing:8)],spacing:8) {
                         ForEach(assets,id:\.localIdentifier) { asset in
-                            MovieTile(asset:asset, badge:badge(asset), selected:selected.contains(asset.localIdentifier),
+                            MovieTile(asset:asset, badge:m.pickerBadge(asset), selected:selected.contains(asset.localIdentifier),
                                       preview:{ preview = PreviewAsset(asset:asset) },
                                       select:{ if !selected.insert(asset.localIdentifier).inserted { selected.remove(asset.localIdentifier) } })
                         }
@@ -237,7 +249,7 @@ struct ImportView: View {
             .safeAreaInset(edge:.bottom) {
                 if loading { Text(m.importStatus.isEmpty ? progress : m.importStatus).padding() }
                 else if !selected.isEmpty { Button("Queue \(selected.count) selected") {
-                    matches = Set(assets.filter { selected.contains($0.localIdentifier) && badge($0) != nil }.map(\.localIdentifier))
+                    matches = Set(assets.filter { selected.contains($0.localIdentifier) && m.pickerBadge($0) != nil }.map(\.localIdentifier))
                     if matches.isEmpty { enqueue(skip:false) } else { review = true }
                 }.buttonStyle(.borderedProminent).padding() }
             }
