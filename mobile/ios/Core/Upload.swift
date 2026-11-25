@@ -22,6 +22,7 @@ struct Job: Identifiable, Codable, Equatable {
     var videoID: String?
     var detail = ""
     var created = Date()
+    var originalDeleted: Date?
     var duration: Double?
     var completed: Date?
     var lastAttempt: Date?

@@ -81,6 +81,7 @@ struct JobList: View {
     @State private var sort = "Newest"
     @State private var playlist = ""
     @State private var selection = Set<UUID>()
+    @State private var cleanup: CleanupSelection?
     @State private var confirm = false
     var rows: [Job] {
         m.jobs.filter { job in
@@ -109,8 +110,13 @@ struct JobList: View {
                     if !archive { Button("Retry failed items") { Task { for job in m.jobs where job.phase == .failed { await m.run(job.id) } } } }
                 } label: { Label("Filter and sort",systemImage:"line.3.horizontal.decrease.circle") }
                 if !archive && !selection.isEmpty { Button("Start selected") { m.startSelected(selection); selection.removeAll() }.disabled(m.channel == nil || !rows.contains(where:{ selection.contains($0.id) && $0.phase == .queued })) }
-                if !selection.isEmpty { Button("Remove",role:.destructive) { confirm = true } }
-            }.confirmationDialog("Remove selected local records and staged copies?",isPresented:$confirm) {
+                if !selection.isEmpty { Menu("Actions") {
+                    if archive { Button("Delete from iPhone…",role:.destructive) {
+                        cleanup = CleanupSelection(jobs:rows.filter { selection.contains($0.id) })
+                    }.disabled(rows.filter { selection.contains($0.id) }.contains { $0.originalDeleted != nil }) }
+                    Button("Remove local records",role:.destructive) { confirm = true } } }
+            }.sheet(item:$cleanup) { CleanupReview(records:$0.jobs) }
+            .confirmationDialog("Remove selected local records and staged copies?",isPresented:$confirm) {
                 Button("Remove eligible records",role:.destructive) { do { for job in m.jobs where selection.contains(job.id) { try m.forget(job) }; selection.removeAll() } catch { m.show(error) } }
             }
         }
@@ -118,6 +124,7 @@ struct JobList: View {
 }
 struct JobDetail: View {
     let id: UUID
+    @State private var cleanup: CleanupSelection?
     @State private var recoveryID = ""
     @EnvironmentObject var m: Model
     var body: some View {
@@ -144,6 +151,8 @@ struct JobDetail: View {
                     } else { Text(job.privacy.capitalized); Text(m.playlists.first(where:{ $0.id == job.playlistID })?.title ?? (job.playlistID.isEmpty ? "No playlist" : job.playlistID)) }
                 }
                 if let video = job.videoID, let url = URL(string:"https://www.youtube.com/watch?v=" + video) {
+                    if job.originalDeleted != nil { Text("Original deleted from device") }
+                    else { Button("Delete from iPhone…",role:.destructive) { cleanup = CleanupSelection(jobs:[job]) } }
                     Link("Open on YouTube",destination:url)
                     Button("Copy link") { UIPasteboard.general.url = url }
                     Button("Refresh YouTube status") { Task { do {
@@ -163,7 +172,7 @@ struct JobDetail: View {
                     Button(job.phase == .playlist ? "Retry playlist association" : job.phase == .queued ? "Start upload" : "Resume or retry") { Task { await m.run(id) } }.disabled(m.busy.contains(id))
                 }
             }
-        }.navigationTitle("Video details")
+        }.navigationTitle("Video details").sheet(item:$cleanup) { CleanupReview(records:$0.jobs) }
     }
     func binding(_ path: WritableKeyPath<Job,String>, _ job: Job) -> Binding<String> {
         Binding(get:{ job[keyPath:path] },set:{ value in do { try m.edit(id) { $0[keyPath:path] = value } } catch { m.show(error) } })
