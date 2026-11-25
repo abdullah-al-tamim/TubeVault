@@ -34,6 +34,13 @@ struct Home: View {
             NavigationStack {
                 List {
                     Section("YouTube channel") { Text(m.channel?.title ?? "Connect Google in Settings") }
+                    if !staged.isEmpty {
+                        Section("Transfers") {
+                            ForEach(staged.filter { $0.phase == .uploading } + staged.filter { $0.phase != .uploading }) { job in
+                                TransferRow(job:job)
+                            }
+                        }
+                    }
                     Section("Archive") {
                         LabeledContent("Uploaded", value: String(accepted.count))
                         LabeledContent("Uploaded bytes", value: bytes(accepted.reduce(Int64(0)) { $0 + $1.bytes }))
@@ -46,6 +53,7 @@ struct Home: View {
                         if m.jobs.isEmpty { Text("Add a video from Photos or Files to get started.") }
                     }
                 }.navigationTitle("TubeVault")
+                .navigationDestination(for:UUID.self) { JobDetail(id:$0) }
             }
     }
     var body: some View {
@@ -166,6 +174,7 @@ struct ImportView: View {
     @EnvironmentObject var m: Model
     @State private var files = false
     @State private var loading = false
+    @State private var preview: PreviewAsset?
     private var assets: [PHAsset] { m.photoAssets }
     @State private var selected = Set<String>()
     @State private var progress = ""
@@ -177,13 +186,11 @@ struct ImportView: View {
                     await m.scanPhotos(request:true)
                 } }
                 if !assets.isEmpty { Section("Photos") {
-                    ForEach(assets,id:\.localIdentifier) { asset in
-                        Button { if !selected.insert(asset.localIdentifier).inserted { selected.remove(asset.localIdentifier) } } label: {
-                            HStack {
-                                VStack(alignment:.leading) { Text(PHAssetResource.assetResources(for:asset).first(where: { $0.type == .video })?.originalFilename ?? "Video"); Text(asset.creationDate?.formatted() ?? "").font(.caption) }
-                                Spacer()
-                                Image(systemName:selected.contains(asset.localIdentifier) ? "checkmark.circle.fill" : "circle")
-                            }
+                    LazyVGrid(columns:[GridItem(.adaptive(minimum:125), spacing:8)],spacing:8) {
+                        ForEach(assets,id:\.localIdentifier) { asset in
+                            MovieTile(asset:asset, selected:selected.contains(asset.localIdentifier),
+                                      preview:{ preview = PreviewAsset(asset:asset) },
+                                      select:{ if !selected.insert(asset.localIdentifier).inserted { selected.remove(asset.localIdentifier) } })
                         }
                     }
                 } }
@@ -199,6 +206,7 @@ struct ImportView: View {
                     }
                 } }.buttonStyle(.borderedProminent).padding() }
             }
+            .sheet(item:$preview) { MoviePreview(asset:$0.asset) }
             .fileImporter(isPresented:$files,allowedContentTypes:[.movie,.video],allowsMultipleSelection:true) { result in
                 Task { loading = true; defer { loading = false }
                     do { for file in try result.get() { progress = "Staging " + file.lastPathComponent; do { try await m.importFile(file) } catch { m.show(error) } } } catch { m.show(error) }
