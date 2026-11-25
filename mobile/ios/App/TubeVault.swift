@@ -167,6 +167,7 @@ struct JobDetail: View {
                         Button("Verify ownership and job marker") { Task { do { try await m.recover(job,video:recoveryID) } catch { m.show(error) } } }
                     }
                 }
+                if job.phase == .waiting { Button("Pause waiting upload") { Task { await m.pause(id) } } }
                 if job.phase == .uploading { Button("Pause transfer") { Task { await m.pause(id) } }; Button("Cancel transfer",role:.destructive) { Task { await m.pause(id,cancel:true) } } }
                 if [.queued,.paused,.failed,.playlist,.cancelled].contains(job.phase) {
                     Button(job.phase == .playlist ? "Retry playlist association" : job.phase == .queued ? "Start upload" : "Resume or retry") { Task { await m.run(id) } }.disabled(m.busy.contains(id))

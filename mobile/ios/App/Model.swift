@@ -278,7 +278,7 @@ import UniformTypeIdentifiers
             }
             if !interrupted, status == 308, job.phase == .uploading, let offset = Rule.offset(response?.value(forHTTPHeaderField:"Range"),total:job.bytes), offset > job.confirmed, offset < job.bytes {
                 try? FileManager.default.removeItem(at: storage().tail(id))
-                Task { if jobs.first(where:{ $0.id == id })?.phase == .paused { await run(id) } }
+                try edit(id) { $0.phase = .waiting; $0.batchOwner = job.channel; $0.detail = "Waiting to send the next part of this upload." }
             }
             if !interrupted && (status == 429 || (500..<600).contains(status)) { scheduleRetry(id) }
         } catch { show(error) }
@@ -292,6 +292,9 @@ import UniformTypeIdentifiers
         try edit(job.id) { $0.phase = .done; $0.detail = "Playlist membership confirmed." }
     }
     func pause(_ id: UUID, cancel: Bool = false) async {
+        if jobs.first(where:{ $0.id == id })?.phase == .waiting, !busy.contains(id) {
+            do { try edit(id) { $0.phase = $0.channel.isEmpty ? .queued : .paused; $0.batchOwner = nil; $0.detail = "" } } catch { show(error) }; return
+        }
         if cancel { do { try edit(id) { $0.phase = .cancelled } } catch { show(error); return } }
         let tasks = await Transfers.shared.session.allTasks
         for task in tasks where task.taskDescription == id.uuidString { task.cancel() }

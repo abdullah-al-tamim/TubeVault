@@ -3,6 +3,7 @@ import SwiftUI
 final class MockGoogle: URLProtocol {
     static var revoked = false
     static var inserted = false
+    static var processed = false
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func stopLoading() {}
@@ -14,6 +15,8 @@ final class MockGoogle: URLProtocol {
             if Self.revoked { status = 400 } else { result = ["access_token":"test-only","expires_in":3600] }
         case ("/youtube/v3/channels",_), ("/youtube/v3/playlists",_):
             result = ["items":[["id":"test","snippet":["title":"Fixture"]]]]
+        case ("/youtube/v3/videos","GET"):
+            result = ["items":[["id":"mockvideo01","snippet":["channelId":"test"],"status":["uploadStatus":Self.processed ? "processed" : "uploaded"]]]]
         case ("/youtube/v3/playlistItems","GET"):
             result = ["items":Self.inserted ? [["id":"membership"]] : []]
         case ("/youtube/v3/playlistItems","POST"):
@@ -71,7 +74,18 @@ struct SimulatorChecks: View {
             try require(connected.channel?.id == "test","Authenticated channel")
             await connected.run(job.id)
             try require(MockGoogle.inserted && connected.jobs.first?.phase == .done,"Playlist recovery without second upload")
-            var selected = Job(filename:"batch.mov",source:"fixture",bytes:10,digest:"batch",privacy:"private",playlistID:"")
+            let archived = connected.jobs[0]
+            var blocked = false
+            do { try await connected.verifyBackups([archived]) } catch { blocked = true }
+            try require(blocked,"Block cleanup while processing")
+            MockGoogle.processed = true
+            try await connected.verifyBackups([archived])
+            var missing = archived
+            missing.videoID = "missing"
+            blocked = false
+            do { try await connected.verifyBackups([missing]) } catch { blocked = true }
+            try require(blocked,"Block cleanup for unavailable video")
+            let selected = Job(filename:"batch.mov",source:"fixture",bytes:10,digest:"batch",privacy:"private",playlistID:"")
             let untouched = Job(filename:"other.mov",source:"fixture",bytes:11,digest:"other",privacy:"private",playlistID:"")
             try connected.persist(connected.jobs + [selected,untouched])
             connected.startSelected([selected.id])
