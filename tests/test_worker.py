@@ -118,7 +118,9 @@ def test_quota_cooldown(db, rig):
     worker, yt, _ = rig
     yt.video.side_effect = APIError("quotaExceeded", quota=True)
     worker.step()
-    assert db.settings()["cooldown"] > 0
+    from zoneinfo import ZoneInfo
+    reset = datetime.fromtimestamp(db.settings()["cooldown"], ZoneInfo("America/Los_Angeles"))
+    assert (reset.hour, reset.minute) == (0, 0)
     assert not allowed(db.settings())
 
 
@@ -129,6 +131,52 @@ def test_processing_is_not_completion(db, rig):
     yt.insert.assert_not_called()
     with db.session() as s:
         assert s.get(Job, job_id).state == "PROCESSING"
+
+
+def test_processing_batch_maps_results_by_id_and_isolates_missing_video(db, rig):
+    worker, yt, job_id = rig
+    with db.session() as s:
+        job = s.get(Job, job_id)
+        job.account_id, job.video_id, job.state = "channel", "pending", "PROCESSING"
+    yt.videos.return_value = {"ready": yt.video.return_value}
+    assert worker.processing_video("channel", "ready") == yt.video.return_value
+    with pytest.raises(APIError, match="Video_not_visible_yet"):
+        worker.processing_video("channel", "pending")
+    yt.videos.assert_called_once_with(["ready", "pending"])
+    yt.video.assert_not_called()
+
+
+def test_processed_upload_without_processing_details_completes(db, rig):
+    worker, yt, job_id = rig
+    yt.video.return_value = {"snippet": {"channelId": "channel"}, "status": {"uploadStatus": "processed"}}
+    worker.step()
+    with db.session() as s:
+        assert s.get(Job, job_id).state == "COMPLETED"
+
+
+def test_44_processing_jobs_use_one_status_request_per_round(db, rig):
+    import time
+    worker, yt, job_id = rig
+    with db.session() as s:
+        first = s.get(Job, job_id)
+        first.video_id, first.account_id, first.state = "video-0", "channel", "PROCESSING"
+        for i in range(1, 44):
+            s.add(Job(identity_id=first.identity_id, instance_id=first.instance_id,
+                      mapping_id=first.mapping_id, title=str(i), state="PROCESSING",
+                      account_id="channel", video_id=f"video-{i}"))
+    yt.videos.side_effect = lambda ids: {
+        key: {"snippet": {"channelId": "channel"}, "processingDetails": {"processingStatus": "processing"}}
+        for key in ids
+    }
+    for _ in range(44):
+        worker.step()
+    assert yt.videos.call_count == 1
+    yt.video.assert_not_called()
+    yt.start.assert_not_called()
+    yt.insert.assert_not_called()
+    with db.session() as s:
+        assert all(job.state == "PROCESSING" and job.next_attempt > time.time() + 280
+                   for job in s.scalars(select(Job)))
 
 
 def test_source_changes_fail_before_upload(db, video, rig):

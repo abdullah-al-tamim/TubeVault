@@ -1,6 +1,6 @@
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from sqlalchemy import select, update
@@ -40,6 +40,8 @@ class Worker:
         self.stop = threading.Event()
         self.network_blocked = threading.Event()
         self.playlist_lock = threading.Lock()
+        self.status_lock = threading.Lock()
+        self.status_cache = {}
         from .duplicates import DuplicateGuard
         self.duplicates = DuplicateGuard(db, youtube)
 
@@ -92,7 +94,11 @@ class Worker:
                     transition(s, job, "FAILED_PERMANENT", e.reason)
                 s.add(Attempt(job_id=job.id, reason=e.reason))
             if e.quota or e.reason in {"Google sign-in expired; reconnect in Settings", "Google sign-in required; connect in Settings"}:
-                self.db.configure({"cooldown": time.time() + RETRY_SECONDS, "cooldown_reason": e.reason})
+                until = time.time() + RETRY_SECONDS
+                if e.reason in {"quotaExceeded", "dailyLimitExceeded"}:
+                    tomorrow = datetime.now(ZoneInfo("America/Los_Angeles")) + timedelta(days=1)
+                    until = tomorrow.replace(hour=0, minute=0, second=5, microsecond=0).timestamp()
+                self.db.configure({"cooldown": until, "cooldown_reason": e.reason})
         except Exception as e:
             with self.db.session() as s:
                 job = s.get(Job, job_id)
@@ -109,6 +115,30 @@ class Worker:
     def interrupted(self, job_id):
         with self.db.session() as s:
             return bool(s.get(Job, job_id).control_requested) or self.stop.is_set() or self.network_blocked.is_set() or not allowed(self.db.settings())
+
+    def processing_video(self, account_id, video_id):
+        # Only processing polls share results. Cleanup and recovery verify independently.
+        with self.status_lock:
+            now = time.monotonic()
+            self.status_cache = {k: v for k, v in self.status_cache.items() if v[0] > now}
+            key = (account_id, video_id)
+            if key not in self.status_cache:
+                with self.db.session() as s:
+                    others = list(s.scalars(select(Job.video_id).where(
+                        Job.account_id == account_id, Job.state == "PROCESSING",
+                        Job.video_id.is_not(None), Job.video_id != video_id,
+                        Job.control_requested == "", Job.next_attempt <= time.time() + 60
+                    ).distinct().order_by(Job.video_id).limit(49)))
+                if not others:
+                    return self.youtube.video(video_id)
+                ids = [video_id, *others]
+                videos = self.youtube.videos(ids)
+                for item_id in ids:
+                    self.status_cache[account_id, item_id] = (now + 120, videos.get(item_id))
+            _, video = self.status_cache[key]
+            if video is None:
+                raise APIError("Video_not_visible_yet", retryable=True)
+            return video
 
     def run(self, job_id):
         if self.interrupted(job_id):
@@ -145,6 +175,7 @@ class Worker:
             session = None
             job.state = "QUEUED"
         if not job.video_id:
+            inventory = None
             path = Path(instance.path)
             st = path.stat()
             if (st.st_size, st.st_mtime_ns) != (instance.size, instance.mtime_ns) or digest(path) != identity.sha256:
@@ -192,7 +223,10 @@ class Worker:
             offset, video_id = self.ack(response, identity.size)
             if not video_id:
                 with self.duplicates.lock:
-                    if self.duplicates.match(job_id, self.duplicates.inventory(), include_session=True):
+                    if inventory is None:
+                        # Resuming a previously saved session needs a fresh channel scan.
+                        inventory = self.duplicates.inventory()
+                    if self.duplicates.match(job_id, inventory, include_session=True):
                         return
             with path.open("rb") as source:
                 while not video_id and offset < identity.size:
@@ -229,10 +263,12 @@ class Worker:
             job.video_id = video_id
         if self.interrupted(job_id):
             return
-        video = self.youtube.video(job.video_id)
+        video = self.processing_video(account.id, job.video_id)
         if video["snippet"]["channelId"] != account.id:
             raise APIError("Video_channel_mismatch")
-        processing = video.get("processingDetails", {}).get("processingStatus", "processing")
+        processing = video.get("processingDetails", {}).get("processingStatus")
+        if processing is None:
+            processing = "succeeded" if video.get("status", {}).get("uploadStatus") == "processed" else "processing"
         if video.get("status", {}).get("uploadStatus") in {"rejected", "failed", "deleted"} or processing in {"failed", "terminated"}:
             raise APIError("YouTube_processing_failed")
         with self.db.session() as s:
@@ -242,7 +278,7 @@ class Worker:
             current = s.get(Job, job_id)
             if processing != "succeeded":
                 transition(s, current, "PROCESSING")
-                current.next_attempt = time.time() + 60
+                current.next_attempt = time.time() + (900 if current.next_attempt else 300)
                 return
             transition(s, current, "PLAYLIST_PENDING")
         if self.interrupted(job_id):

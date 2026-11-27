@@ -109,13 +109,19 @@ class YouTube:
                             "Content-Type": "application/octet-stream"}, content=data)
 
     def video(self, video_id):
-        items = self.request("GET", "videos", params={"id": video_id, "part": "status,processingDetails,snippet"}).json().get("items", [])
-        if not items:
+        item = self.videos([video_id]).get(video_id)
+        if item is None:
             raise APIError("Video_not_visible_yet", retryable=True)
-        return items[0]
+        return item
+
+    def videos(self, video_ids):
+        items = self.request("GET", "videos", params={
+            "id": ",".join(video_ids), "part": "status,processingDetails,snippet"
+        }).json().get("items", [])
+        return {item["id"]: item for item in items}
 
     def insert(self, playlist_id, video_id):
-        existing = self.list_all("playlistItems", {"part": "contentDetails", "playlistId": playlist_id, "maxResults": 50})
+        existing = self.list_all("playlistItems", {"part": "contentDetails", "playlistId": playlist_id, "videoId": video_id, "maxResults": 50})
         if any(p["contentDetails"]["videoId"] == video_id for p in existing):
             return
         self.request("POST", "playlistItems", params={"part": "snippet"}, json={"snippet": {
