@@ -1,0 +1,56 @@
+name: TubeVault iOS
+on:
+  pull_request:
+    paths: ['mobile/ios/**', '.github/workflows/ios.yml']
+  workflow_dispatch:
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -e ".[test,desktop]"
+      - run: python -m pytest -q -m "not integration"
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      - run: npm test
+        working-directory: frontend
+      - run: npx playwright install chromium
+        working-directory: frontend
+      - run: npm run test:e2e -- --workers=2
+        working-directory: frontend
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: mobile/ios
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run protocol tests
+        run: swift test
+      - name: Build and package native application
+        env:
+          GOOGLE_IOS_CLIENT_ID: ${{ vars.GOOGLE_IOS_CLIENT_ID }}
+          IOS_BUNDLE_ID: ${{ vars.IOS_BUNDLE_ID }}
+        run: bash build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TubeVault-unsigned
+          path: mobile/ios/build/TubeVault.ipa
+          if-no-files-found: error
+      - name: Exercise persistent queue on an iPhone simulator
+        run: bash simulator.sh
